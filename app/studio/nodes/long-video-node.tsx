@@ -64,6 +64,7 @@ export const LongVideoNode = memo(function LongVideoNode({
   const allEdges = useEdges();
   const d = data as StudioNodeData<LongVideoForm>;
   const [planState, setPlanState] = useState<PlanState>({ status: "idle" });
+  const [curlCopied, setCurlCopied] = useState<number | null>(null);
 
   const update = useCallback(
     (patch: Partial<LongVideoForm>) => {
@@ -107,6 +108,85 @@ export const LongVideoNode = memo(function LongVideoNode({
       return values.join("\n");
     },
     [id, allNodes, allEdges],
+  );
+
+  const copyShotCurl = useCallback(
+    async (shotIndex: number) => {
+      const shots = d.form.plannedShots;
+      if (!shots?.[shotIndex]) return;
+
+      const isV2 = d.form.model.startsWith("dreamina-seedance-2-");
+      const modelCaps = findVideoModel(d.form.model)?.caps;
+      const validDurations = modelCaps?.durations ?? [5, 10];
+      const durationEach = validDurations.includes(d.form.durationEach)
+        ? d.form.durationEach
+        : validDurations[validDurations.length - 1];
+
+      const body: Record<string, unknown> = {
+        prompt: shots[shotIndex],
+        model: d.form.model,
+        resolution: d.form.resolution,
+        duration: durationEach,
+        ratio: d.form.ratio,
+        camerafixed: false,
+      };
+      if (isV2) body.audio = d.form.audio;
+
+      // Asset ID references
+      const refsRaw = resolveInput("references");
+      if (isV2 && refsRaw) {
+        const assetRefs = refsRaw
+          .split("\n").map((r) => r.trim()).filter(Boolean)
+          .map(parseAssetRef)
+          .filter((r): r is Extract<AssetRef, { kind: "asset" }> => r.kind === "asset")
+          .map(({ asset_id, type }) => ({ role: "subject" as const, asset_id, type }));
+        if (assetRefs.length > 0) body.references = assetRefs;
+      }
+
+      // Reference URLs → reference_image
+      const refUrlsRaw = resolveInput("referenceUrls");
+      if (isV2 && refUrlsRaw) {
+        const urlRefs = refUrlsRaw.split("\n").map((u) => u.trim()).filter(Boolean);
+        if (urlRefs.length > 0) {
+          const existing = (body.images as Array<{ url: string; role?: string }>) ?? [];
+          body.images = [...existing, ...urlRefs.map((url) => ({ url, role: "reference_image" }))];
+        }
+      }
+
+      // First frame (shot 0, no previous clip context at plan time)
+      if (shotIndex === 0) {
+        const firstFrame = resolveInput("image").trim();
+        if (firstFrame.startsWith("http")) {
+          const existing = (body.images as Array<{ url: string; role?: string }>) ?? [];
+          body.images = [...existing, { url: firstFrame, role: "first_frame" }];
+        }
+        if (isV2) {
+          const lastFrame = resolveInput("lastFrame").trim();
+          if (lastFrame.startsWith("http")) {
+            const existing = (body.images as Array<{ url: string; role?: string }>) ?? [];
+            body.images = [...existing, { url: lastFrame, role: "last_frame" }];
+          }
+        }
+      }
+      // Note: shots > 0 also receive the previous clip as reference_video at runtime,
+      // but that URL is only known during execution so it is omitted here.
+
+      try {
+        const res = await fetch("/api/video/curl", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json() as { curl?: string };
+        if (!res.ok || !data.curl) return;
+        await navigator.clipboard.writeText(data.curl);
+        setCurlCopied(shotIndex);
+        setTimeout(() => setCurlCopied(null), 2000);
+      } catch {
+        // clipboard write may fail in non-secure contexts; silently ignore
+      }
+    },
+    [d.form, resolveInput],
   );
 
   const handlePlan = useCallback(async () => {
@@ -300,9 +380,19 @@ export const LongVideoNode = memo(function LongVideoNode({
           </div>
           {plannedShots!.map((shot, i) => (
             <div key={i} className="flex flex-col gap-0.5">
-              <span className="font-mono text-[9px] text-ink-dim">
-                {plannedShotTitles?.[i] ? `Clip ${i + 1} — ${plannedShotTitles[i]}` : `Shot ${i + 1}`}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[9px] text-ink-dim">
+                  {plannedShotTitles?.[i] ? `Clip ${i + 1} — ${plannedShotTitles[i]}` : `Shot ${i + 1}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void copyShotCurl(i)}
+                  className="nodrag font-mono text-[9px] text-ink-dim hover:text-accent transition-colors"
+                  title="Copy curl command for this shot"
+                >
+                  {curlCopied === i ? "Copied!" : "curl"}
+                </button>
+              </div>
               <textarea
                 rows={10}
                 value={shot}
