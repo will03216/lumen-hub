@@ -51,8 +51,13 @@ type PlanState =
   | { status: "loading" }
   | { status: "error"; message: string };
 
-const POLL_INTERVAL_MS = 3000;
-const POLL_MAX_TRIES = 200;
+// Seedance renders take 60–120s minimum. Wait 20s before the first poll so
+// we never burn round-trips against a task that is guaranteed still queued.
+// After that, 8s intervals are fine — renders don't finish in sub-second windows.
+// 20s initial + 80 × 8s = ~11 min max timeout per shot (same order as before).
+const POLL_INITIAL_DELAY_MS = 20_000;
+const POLL_INTERVAL_MS = 8_000;
+const POLL_MAX_TRIES = 80;
 
 export const LongVideoNode = memo(function LongVideoNode({
   id,
@@ -630,9 +635,12 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
       if (!taskId) throw new Error(`No task id for shot ${i + 1}`);
 
       let clipUrl: string | undefined;
+      // Initial backoff — renders are always queued for at least this long.
+      onProgress?.(`Shot ${i + 1}/${shots.length} — waiting for render to start…`);
+      await sleepCancellable(POLL_INITIAL_DELAY_MS, signal);
       for (let tries = 1; tries <= POLL_MAX_TRIES; tries++) {
-        await sleepCancellable(POLL_INTERVAL_MS, signal);
-        onProgress?.(`Shot ${i + 1}/${shots.length} — polling · try ${tries}`);
+        const elapsedSec = Math.round((POLL_INITIAL_DELAY_MS + (tries - 1) * POLL_INTERVAL_MS) / 1000);
+        onProgress?.(`Shot ${i + 1}/${shots.length} — rendering… ${elapsedSec}s`);
         const pollRes = await fetch(
           `/api/video/${taskId}?model=${encodeURIComponent(form.model)}`,
           { signal },
@@ -647,6 +655,7 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
         }
         if (status === "failed") throw new Error(pollData?.error?.message ?? `shot ${i + 1} failed`);
         if (status === "cancelled") throw new Error(`Shot ${i + 1} cancelled upstream`);
+        await sleepCancellable(POLL_INTERVAL_MS, signal);
       }
       if (!clipUrl) throw new Error(`Shot ${i + 1} timed out`);
 
