@@ -51,6 +51,7 @@ export const PromptComposerNode = memo(function PromptComposerNode({
   const d = data as StudioNodeData<PromptComposerForm>;
   const [composeState, setComposeState] = useState<ComposeState>({ status: "idle" });
   const [showSettings, setShowSettings] = useState(false);
+  const [curlCopied, setCurlCopied] = useState(false);
 
   const update = useCallback(
     (patch: Partial<PromptComposerForm>) => {
@@ -120,6 +121,33 @@ export const PromptComposerNode = memo(function PromptComposerNode({
       });
     }
   }, [d.form, resolvePortInputs, update]);
+
+  const copyCurl = useCallback(async () => {
+    const portInputs = resolvePortInputs();
+    try {
+      const res = await fetch("/api/compose-prompt/curl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal: d.form.goal.trim(),
+          targetModel: d.form.targetModel,
+          text: portInputs.text ?? "",
+          imageUrl: (portInputs.image || d.form.imageUrl).trim(),
+          videoUrl: (portInputs.video || d.form.videoUrl).trim(),
+          temperature: d.form.temperature,
+          maxTokens: d.form.maxTokens,
+          extraInstruction: d.form.extraInstruction,
+        }),
+      });
+      const data = await res.json() as { curl?: string };
+      if (!res.ok || !data.curl) return;
+      await navigator.clipboard.writeText(data.curl);
+      setCurlCopied(true);
+      setTimeout(() => setCurlCopied(false), 2000);
+    } catch {
+      // clipboard write may fail in non-secure contexts; silently ignore
+    }
+  }, [d.form, resolvePortInputs]);
 
   const hasPrompt = d.form.composedPrompt.length > 0;
 
@@ -265,15 +293,25 @@ export const PromptComposerNode = memo(function PromptComposerNode({
         )}
       </div>
 
-      {/* ── Compose button ─────────────────────────────────────────── */}
-      <button
-        type="button"
-        onClick={() => void handleCompose()}
-        disabled={composeState.status === "loading"}
-        className="nodrag w-full rounded-[8px] border border-accent bg-accent-soft px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:opacity-40"
-      >
-        {composeState.status === "loading" ? "Composing…" : "Compose with Seed 2.0 Pro"}
-      </button>
+      {/* ── Compose button + curl copy ─────────────────────────────── */}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void handleCompose()}
+          disabled={composeState.status === "loading"}
+          className="nodrag flex-1 rounded-[8px] border border-accent bg-accent-soft px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:opacity-40"
+        >
+          {composeState.status === "loading" ? "Composing…" : "Compose with Seed 2.0 Pro"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void copyCurl()}
+          title="Copy curl command for this request"
+          className="nodrag shrink-0 rounded-[8px] border border-border bg-panel px-2.5 py-1.5 font-mono text-[10px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
+        >
+          {curlCopied ? "Copied!" : "curl"}
+        </button>
+      </div>
 
       {/* ── Compose error ──────────────────────────────────────────── */}
       {composeState.status === "error" && (

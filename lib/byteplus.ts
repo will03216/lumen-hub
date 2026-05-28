@@ -561,6 +561,52 @@ export async function composePrompt(
   return { prompt };
 }
 
+/** Returns a copy-paste ready curl command that reproduces the exact BytePlus
+ *  /chat/completions request for prompt composition. Intended for debugging only. */
+export function buildComposeCurl(p: ComposePromptParams): string {
+  type ContentBlock =
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } };
+
+  const content: ContentBlock[] = [];
+  const goal = p.goal?.trim();
+  if (goal) content.push({ type: "text", text: `Goal: ${goal}` });
+  const text = p.text?.trim();
+  if (text) content.push({ type: "text", text: `Context:\n${text.slice(0, 2000)}` });
+  const imageUrl = p.imageUrl?.trim();
+  if (imageUrl) content.push({ type: "image_url", image_url: { url: imageUrl } });
+  const videoUrl = p.videoUrl?.trim();
+  if (videoUrl) content.push({ type: "text", text: `Video reference: ${videoUrl}` });
+  content.push({
+    type: "text",
+    text: `Write the optimized ${p.targetModel === "seedream" ? "image" : p.targetModel === "seedance" ? "video" : "media"} generation prompt now.`,
+  });
+
+  const systemContent = p.extraInstruction?.trim()
+    ? `${COMPOSE_SYSTEM[p.targetModel]}\n\nAdditional instructions: ${p.extraInstruction.trim()}`
+    : COMPOSE_SYSTEM[p.targetModel];
+
+  const body = {
+    model: resolveModel(PROMPT_MODEL),
+    messages: [
+      { role: "system", content: systemContent },
+      { role: "user", content },
+    ],
+    max_tokens: Math.min(8192, Math.max(50, p.maxTokens ?? 500)),
+    temperature: Math.min(2, Math.max(0, p.temperature ?? 0.8)),
+  };
+
+  const endpoint = `${BASE_URL}/chat/completions`;
+  const key = process.env.BYTEPLUS_API_KEY ?? process.env.ARK_API_KEY ?? "<BYTEPLUS_API_KEY>";
+  const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
+  return [
+    `curl -X POST '${endpoint}' \\`,
+    `  -H 'Authorization: Bearer ${key}' \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '${json}'`,
+  ].join("\n");
+}
+
 // ---------- Video ----------
 export type VideoMode = "t2v" | "i2v" | "first_last" | "multi_shot";
 
