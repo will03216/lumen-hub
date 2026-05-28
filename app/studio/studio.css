@@ -1,0 +1,148 @@
+/**
+ * Scoped React Flow overrides — every selector starts with `.studio-canvas`
+ * so this file can't bleed into the rest of the app. Goal: drop React
+ * Flow's default light-mode chrome and re-skin everything in the cinematic
+ * editorial palette (matches design/README.md tokens).
+ */
+
+.studio-canvas {
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+.studio-canvas .react-flow {
+  background: var(--bg);
+}
+
+/* ---------- Background dots ---------- */
+
+.studio-canvas .react-flow__background {
+  background-color: var(--bg);
+}
+
+/* ---------- Edges ---------- */
+
+.studio-canvas .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.65;
+}
+
+.studio-canvas .react-flow__edge.selected .react-flow__edge-path,
+.studio-canvas .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--accent);
+  opacity: 1;
+  stroke-width: 2;
+}
+
+.studio-canvas .react-flow__connection-path {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+/* ---------- Handles ---------- */
+
+.studio-canvas .react-flow__handle {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--line-strong);
+  background: var(--panel);
+  border-radius: 9999px;
+  transition: all 120ms ease;
+}
+
+.studio-canvas .react-flow__handle:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* React Flow tags source handles with the .source class — accent-fill them
+   so users can tell at a glance which side of the node emits values. */
+.studio-canvas .react-flow__handle.source {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.studio-canvas .react-flow__handle-connecting {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.studio-canvas .react-flow__handle-valid {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+/* ---------- Controls (zoom in / out / fit-view) ---------- */
+
+.studio-canvas .react-flow__controls {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.studio-canvas .react-flow__controls-button {
+  background: transparent;
+  color: var(--ink-dim);
+  border: none;
+  border-bottom: 1px solid var(--line);
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+}
+
+.studio-canvas .react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.studio-canvas .react-flow__controls-button:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+/* ---------- MiniMap ---------- */
+
+.studio-canvas .react-flow__minimap {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.studio-canvas .react-flow__minimap-mask {
+  fill: rgba(5, 5, 10, 0.8);
+}
+
+/* ---------- Selection rectangle ---------- */
+
+.studio-canvas .react-flow__selection {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+
+/* ---------- Pane focus outline (kill default light blue) ---------- */
+
+.studio-canvas .react-flow__pane:focus,
+.studio-canvas .react-flow__pane:focus-visible {
+  outline: none;
+}
+
+/* ---------- Node selected outline ---------- *
+ * NodeShell already swaps its border colour when `selected` is true,
+ * so we suppress React Flow's own selected outline to avoid a doubled box. */
+.studio-canvas .react-flow__node.selected {
+  outline: none;
+}
+
+.studio-canvas .react-flow__node {
+  /* React Flow defaults to a transparent box-sizing border-box; ours sits
+     on top so let it own its own shadow + border. */
+  box-shadow: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+}

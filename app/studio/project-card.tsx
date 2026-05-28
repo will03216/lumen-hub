@@ -1,0 +1,220 @@
+"use client";
+
+import Link from "next/link";
+import {
+  Copy,
+  Eye,
+  Image as ImageIcon,
+  Pencil,
+  Trash2,
+  Type,
+  Video as VideoIcon,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+import { getProject, type ProjectMeta } from "@/lib/studio/projects";
+import { findTemplate } from "@/lib/studio/templates";
+
+type Props = {
+  project: ProjectMeta;
+  onRename: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+};
+
+/**
+ * Single project tile for the My Studio dashboard.
+ *
+ * The card itself is a Link that opens the canvas; action buttons in the
+ * footer use stopPropagation+preventDefault so the wrapping anchor never
+ * navigates when the user clicks a tool. We deliberately don't render a
+ * live thumbnail of the graph — getting a faithful tiny preview of React
+ * Flow takes a hidden offscreen mount per card, which is excessive for a
+ * dashboard. The node-type chip strip below is enough signal.
+ */
+export function ProjectCard({
+  project,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: Props) {
+  // The dashboard supplies just the meta; for the chip strip we need to
+  // peek at canvas.nodes types. Reading from the store here is cheap (just
+  // a localStorage parse, dashboard fits 12+ cards comfortably) and keeps
+  // the dashboard's render fast.
+  const full = getProject(project.id);
+  const nodes = full?.canvas.nodes ?? [];
+  const edgeCount = full?.canvas.edges.length ?? 0;
+  const template = project.templateId
+    ? findTemplate(project.templateId)
+    : undefined;
+
+  return (
+    <Link
+      href={`/studio/${project.id}`}
+      className="group relative flex h-[224px] flex-col border border-border bg-bg-2 transition-colors hover:border-accent"
+    >
+      <CornerTicks />
+
+      {/* Top half — provenance label + node type chips */}
+      <div className="flex flex-1 flex-col justify-between p-4">
+        <div className="flex items-center justify-between gap-2">
+          {template ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-dim">
+              {template.badge} · {template.name}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
+              Custom
+            </span>
+          )}
+          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
+            {nodes.length} · {edgeCount}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {nodes.length === 0 ? (
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute">
+              empty canvas
+            </span>
+          ) : (
+            nodes.slice(0, 12).map((n, i) => (
+              <NodeChip key={`${n.id}-${i}`} type={n.type} />
+            ))
+          )}
+          {nodes.length > 12 && (
+            <span className="font-mono text-[10px] tracking-[0.10em] text-ink-mute">
+              +{nodes.length - 12}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom half — name + meta + actions */}
+      <div className="flex items-end justify-between gap-3 border-t border-border bg-panel/50 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-serif text-[16px] italic text-ink">
+            {project.name}
+          </p>
+          <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute">
+            Edited {formatRelative(project.updatedAt)}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+          <ActionIcon
+            icon={Pencil}
+            label="Rename"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRename();
+            }}
+          />
+          <ActionIcon
+            icon={Copy}
+            label="Duplicate"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDuplicate();
+            }}
+          />
+          <ActionIcon
+            icon={Trash2}
+            label="Delete"
+            danger
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+          />
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function NodeChip({ type }: { type: string }) {
+  const meta = NODE_META[type];
+  if (!meta) return null;
+  const Icon = meta.icon;
+  return (
+    <span
+      title={meta.label}
+      className="inline-flex size-6 items-center justify-center rounded-full border border-border bg-panel text-ink-dim"
+    >
+      <Icon className="size-3" />
+    </span>
+  );
+}
+
+const NODE_META: Record<string, { label: string; icon: LucideIcon }> = {
+  textPrompt: { label: "Text Prompt", icon: Type },
+  imageGen: { label: "Image Gen", icon: ImageIcon },
+  videoGen: { label: "Video Gen", icon: VideoIcon },
+  preview: { label: "Preview", icon: Eye },
+};
+
+function ActionIcon({
+  icon: Icon,
+  label,
+  onClick,
+  danger,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={
+        danger
+          ? "inline-flex size-7 items-center justify-center rounded-full border border-border bg-panel text-ink-dim transition-colors hover:border-[oklch(0.65_0.22_25)] hover:text-[oklch(0.78_0.20_25)]"
+          : "inline-flex size-7 items-center justify-center rounded-full border border-border bg-panel text-ink-dim transition-colors hover:border-accent hover:text-accent"
+      }
+    >
+      <Icon className="size-3.5" />
+    </button>
+  );
+}
+
+function CornerTicks() {
+  return (
+    <>
+      <span className="pointer-events-none absolute -left-px -top-px size-2 border-l border-t border-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="pointer-events-none absolute -right-px -top-px size-2 border-r border-t border-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="pointer-events-none absolute -bottom-px -left-px size-2 border-b border-l border-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="pointer-events-none absolute -bottom-px -right-px size-2 border-b border-r border-accent opacity-0 transition-opacity group-hover:opacity-100" />
+    </>
+  );
+}
+
+/** Compact relative formatter — handles the four buckets that matter
+ *  for an editor (now / minutes / hours / days), then falls back to a
+ *  dated string. We avoid Intl.RelativeTimeFormat so the bundle stays
+ *  free of the locale data shim. */
+function formatRelative(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 30) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  const d = new Date(timestamp);
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  });
+}
