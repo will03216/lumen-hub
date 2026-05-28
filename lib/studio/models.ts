@@ -295,7 +295,7 @@ export type VideoModel = {
 };
 
 const CAPS_V20: VideoCaps = {
-  resolutions: ["480p", "720p"],
+  resolutions: ["480p", "720p", "1080p"],
   durations: [4, 5, 6, 8, 10, 12, 15],
   audio: true,
   referenceMode: true,
@@ -330,13 +330,13 @@ export const VIDEO_MODELS: readonly VideoModel[] = [
   {
     id: "dreamina-seedance-2-0-260128",
     label: "Seedance 2.0",
-    hint: "Native audio · 4–15s",
+    hint: "Native audio · up to 1080p · 4–15s",
     caps: CAPS_V20,
   },
   {
     id: "dreamina-seedance-2-0-fast-260128",
     label: "Seedance 2.0 Fast",
-    hint: "~25% cheaper · faster queue",
+    hint: "~25% cheaper · faster queue · up to 1080p",
     caps: CAPS_V20,
   },
   {

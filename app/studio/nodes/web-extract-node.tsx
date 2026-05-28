@@ -339,8 +339,8 @@ export const webExtractSpec: NodeTypeSpec<WebExtractForm> = {
   inputs: [],
   outputs: [
     { id: "text", label: "text" },
-    { id: "images", label: "images (urls, multi-value)" },
-    { id: "assetId", label: "assetId (multi-value)" },
+    { id: "images", label: "images (urls)" },
+    { id: "assetId", label: "assetId" },
   ],
   defaults: { url: "", editedText: "", selectedMedia: [] },
   hashInputs: (form) => {

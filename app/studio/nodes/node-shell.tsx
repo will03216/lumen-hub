@@ -148,7 +148,7 @@ export function NodeShell({
       </div>
 
       {/* Body — node-specific content */}
-      <div className="space-y-2.5 px-3 py-3">{children}</div>
+      <div className="space-y-3 px-3 py-4">{children}</div>
 
       {/* Footer — only when there's progress or an error to surface */}
       {(data.progress || data.error) && (

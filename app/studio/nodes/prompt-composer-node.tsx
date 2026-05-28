@@ -129,7 +129,7 @@ export const PromptComposerNode = memo(function PromptComposerNode({
       spec={promptComposerSpec}
       data={d}
       selected={selected ?? false}
-      width={320}
+      width={400}
     >
       {/* ── Target model pills ─────────────────────────────────────── */}
       <div className="flex gap-1">
@@ -156,11 +156,11 @@ export const PromptComposerNode = memo(function PromptComposerNode({
           Goal
         </span>
         <textarea
-          rows={2}
+          rows={4}
           value={d.form.goal}
           onChange={(e) => update({ goal: e.target.value })}
           placeholder="Describe what you want to generate…"
-          className="nodrag nowheel w-full resize-none rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
+          className="nodrag nowheel w-full resize-y rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
         />
       </label>
 
@@ -289,10 +289,10 @@ export const PromptComposerNode = memo(function PromptComposerNode({
             Generated Prompt · edit before wiring
           </span>
           <textarea
-            rows={6}
+            rows={10}
             value={d.form.composedPrompt}
             onChange={(e) => update({ composedPrompt: e.target.value })}
-            className="nodrag nowheel w-full resize-none rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.5] text-ink transition-colors focus:border-accent focus:outline-none"
+            className="nodrag nowheel w-full resize-y rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.5] text-ink transition-colors focus:border-accent focus:outline-none"
           />
         </label>
       )}

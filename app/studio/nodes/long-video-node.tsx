@@ -118,9 +118,10 @@ export const LongVideoNode = memo(function LongVideoNode({
 
     // Count reference assets so the planner can write correct inline refs
     const referenceRaw = resolveInput("references");
-    const referenceImageCount = referenceRaw
-      ? referenceRaw.split("\n").filter(Boolean).length
-      : 0;
+    const referenceUrlsRaw = resolveInput("referenceUrls");
+    const referenceImageCount =
+      (referenceRaw ? referenceRaw.split("\n").filter(Boolean).length : 0) +
+      (referenceUrlsRaw ? referenceUrlsRaw.split("\n").filter(Boolean).length : 0);
     const hasFirstFrame = !!resolveInput("image").trim();
 
     const modelCaps = findVideoModel(d.form.model)?.caps;
@@ -165,7 +166,7 @@ export const LongVideoNode = memo(function LongVideoNode({
   const hasPlan = Array.isArray(plannedShots) && plannedShots.length > 0;
 
   return (
-    <NodeShell id={id} spec={longVideoSpec} data={d} selected={selected ?? false} width={360}>
+    <NodeShell id={id} spec={longVideoSpec} data={d} selected={selected ?? false} width={440}>
       <Field label="Model">
         <select
           value={d.form.model}
@@ -303,10 +304,10 @@ export const LongVideoNode = memo(function LongVideoNode({
                 {plannedShotTitles?.[i] ? `Clip ${i + 1} — ${plannedShotTitles[i]}` : `Shot ${i + 1}`}
               </span>
               <textarea
-                rows={8}
+                rows={10}
                 value={shot}
                 onChange={(e) => updateShot(i, e.target.value)}
-                className="nodrag nowheel w-full resize-none rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[10px] leading-[1.5] text-ink transition-colors focus:border-accent focus:outline-none"
+                className="nodrag nowheel w-full resize-y rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[10px] leading-[1.5] text-ink transition-colors focus:border-accent focus:outline-none"
               />
             </div>
           ))}
@@ -341,9 +342,11 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
   description:
     "Plan N shots with Seed 2.0 Pro, generate each via Seedance with reference-chaining, then stitch into one video.",
   inputs: [
-    { id: "prompt", label: "concept / story prompt" },
-    { id: "image", label: "first frame (optional)" },
-    { id: "references", label: "references (asset_ids, multi-wire)" },
+    { id: "prompt", label: "Prompt" },
+    { id: "image", label: "First Frame" },
+    { id: "lastFrame", label: "Last Frame" },
+    { id: "referenceUrls", label: "Reference URLs" },
+    { id: "references", label: "AssetId's" },
   ],
   outputs: [{ id: "url", label: "url" }],
   defaults: {
@@ -369,6 +372,8 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
         form.ratio,
         form.audio ? 1 : 0,
         inputs.image ?? "",
+        inputs.lastFrame ?? "",
+        inputs.referenceUrls ?? "",
         inputs.references ?? "",
         form.plannedShots.join("||"),
       ].join("|");
@@ -383,6 +388,8 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
       form.audio ? 1 : 0,
       inputs.prompt ?? "",
       inputs.image ?? "",
+      inputs.lastFrame ?? "",
+      inputs.referenceUrls ?? "",
       inputs.references ?? "",
     ].join("|");
   },
@@ -464,26 +471,29 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
       };
       if (isV2) body.audio = form.audio;
 
-      // References — asset IDs → body.references, plain URLs → body.images
+      // Asset ID references → body.references
       if (isV2 && inputs.references) {
-        const parsed = inputs.references
+        const assetRefs = inputs.references
           .split("\n")
           .map((r) => r.trim())
           .filter(Boolean)
-          .map(parseAssetRef);
-
-        const assetRefs = parsed
+          .map(parseAssetRef)
           .filter((r): r is Extract<AssetRef, { kind: "asset" }> => r.kind === "asset")
           .map(({ asset_id, type }) => ({ role: "subject" as const, asset_id, type }));
         if (assetRefs.length > 0) body.references = assetRefs;
+      }
 
-        const urlRefs = parsed
-          .filter((r): r is Extract<AssetRef, { kind: "url" }> => r.kind === "url");
+      // Reference URLs → body.images as reference_image
+      if (isV2 && inputs.referenceUrls) {
+        const urlRefs = inputs.referenceUrls
+          .split("\n")
+          .map((u) => u.trim())
+          .filter(Boolean);
         if (urlRefs.length > 0) {
           const existing = (body.images as Array<{ url: string; role?: string }>) ?? [];
           body.images = [
             ...existing,
-            ...urlRefs.map(({ url }) => ({ url, role: "reference_image" })),
+            ...urlRefs.map((url) => ({ url, role: "reference_image" })),
           ];
         }
       }
@@ -499,8 +509,22 @@ export const longVideoSpec: NodeTypeSpec<LongVideoForm> = {
           if (isVideo) {
             body.videos = [{ url: refUrl, role: "reference_video" }];
           } else {
-            body.images = [{ url: refUrl, role: "first_frame" }];
+            const imgs = (body.images as Array<{ url: string; role?: string }>) ?? [];
+            body.images = [...imgs, { url: refUrl, role: "first_frame" }];
           }
+        }
+      }
+
+      // Last frame — only on the first shot (before reference-chaining begins), V2 only
+      if (isV2 && i === 0 && !previousClipUrl && inputs.lastFrame) {
+        const lastFrameUrl = (inputs.lastFrame as string).trim();
+        const isPublicUrl =
+          (lastFrameUrl.startsWith("https://") || lastFrameUrl.startsWith("http://")) &&
+          !lastFrameUrl.startsWith("data:") &&
+          !/localhost|127\.0\.0\.1/.test(lastFrameUrl);
+        if (isPublicUrl) {
+          const imgs = (body.images as Array<{ url: string; role?: string }>) ?? [];
+          body.images = [...imgs, { url: lastFrameUrl, role: "last_frame" }];
         }
       }
 
