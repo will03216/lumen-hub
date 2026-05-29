@@ -250,11 +250,71 @@ const imageToVideo: StudioTemplate = {
   },
 };
 
+const articleNarration: StudioTemplate = {
+  id: "article-narration",
+  name: "Article Narration",
+  description:
+    "Web Extract → Article Ingester (Claude) → Article Narration (Seedance 2.0). Paste a URL, get a narrated 1-minute video.",
+  badge: "ART",
+  order: 4,
+  build: (): CanvasShape => {
+    const we = newId("we");
+    const ai = newId("ai");
+    const an = newId("an");
+    return {
+      nodes: [
+        {
+          id: we,
+          type: "webExtract",
+          position: POS(0, 120),
+          data: { form: {} },
+        },
+        {
+          id: ai,
+          type: "articleIngester",
+          position: POS(400, 0),
+          data: { form: {} },
+        },
+        {
+          id: an,
+          type: "articleNarration",
+          position: POS(900, 60),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${we}-${ai}-text`,
+          source: we,
+          sourceHandle: "text",
+          target: ai,
+          targetHandle: "text",
+        },
+        {
+          id: `${ai}-${an}-prompt`,
+          source: ai,
+          sourceHandle: "prompt",
+          target: an,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${ai}-${an}-narration`,
+          source: ai,
+          sourceHandle: "narration",
+          target: an,
+          targetHandle: "narration",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
   quickClip,
   imageToVideo,
+  articleNarration,
 ] as const;
 
 export function findTemplate(id: string): StudioTemplate | undefined {

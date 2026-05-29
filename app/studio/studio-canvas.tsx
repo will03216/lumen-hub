@@ -32,6 +32,8 @@ import { PreviewNode } from "./nodes/preview-node";
 import { WebExtractNode } from "./nodes/web-extract-node";
 import { PromptComposerNode } from "./nodes/prompt-composer-node";
 import { LongVideoNode } from "./nodes/long-video-node";
+import { ArticleIngesterNode } from "./nodes/article-ingester-node";
+import { ArticleNarrationNode } from "./nodes/article-narration-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -53,6 +55,8 @@ const nodeTypes: NodeTypes = {
   webExtract: WebExtractNode,
   promptComposer: PromptComposerNode,
   longVideo: LongVideoNode,
+  articleIngester: ArticleIngesterNode,
+  articleNarration: ArticleNarrationNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with

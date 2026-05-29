@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
   // ── 1. Download ────────────────────────────────────────────────────────────
   const downloadHeaders: Record<string, string> = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    Accept: kind === "video" ? "video/*,*/*;q=0.8" : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    Accept: kind === "video" ? "video/*,*/*;q=0.8" : "image/webp,image/png,image/jpeg,image/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache",
   };

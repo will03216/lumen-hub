@@ -33,6 +33,76 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "http/https only" }, { status: 400 });
   }
 
+  // Jina.ai reader — default path. Returns clean reader-mode markdown with ads,
+  // embeds, and navigation stripped. Falls back to direct HTML fetch on failure.
+  try {
+    const jinaUrl = `https://r.jina.ai/${url.toString()}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
+    const res = await fetch(jinaUrl, {
+      headers: {
+          Accept: "application/json",
+          "X-Return-Format": "markdown",
+          "X-Target-Selector": "article, main, [role='main']",
+          "X-Remove-Selector": "nav, footer, [class*='cookie'], [class*='consent'], [class*='subscribe'], [class*='comment'], [class*='related'], [class*='share']",
+        },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      type JinaResponse = {
+        data?: {
+          title?: string;
+          description?: string;
+          content?: string;
+          images?: Record<string, string>;
+        };
+      };
+      const json = (await res.json()) as JinaResponse;
+      const d = json.data ?? {};
+      // Extract image URLs from Jina's images map first, then fall back to
+      // parsing markdown ![...](url) syntax from the content.
+      // Strip CDN size constraints (width=N, height=N, w=N, h=N) so we get
+      // the full-resolution image rather than a thumbnail that fails BytePlus's
+      // 300×300 minimum.
+      const upgradeImageUrl = (raw: string): string => {
+        try {
+          const u = new URL(raw);
+          ["width", "height", "w", "h"].forEach((p) => u.searchParams.delete(p));
+          return u.toString();
+        } catch {
+          return raw;
+        }
+      };
+
+      const imageSet = new Set<string>();
+      for (const u of Object.values(d.images ?? {})) {
+        if (typeof u === "string" && u.startsWith("http") && !u.endsWith(".svg"))
+          imageSet.add(upgradeImageUrl(u));
+      }
+      if (imageSet.size === 0 && d.content) {
+        const mdImgRe = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g;
+        let m: RegExpExecArray | null;
+        while ((m = mdImgRe.exec(d.content)) !== null) {
+          const u = m[1];
+          if (!u.endsWith(".svg")) imageSet.add(upgradeImageUrl(u));
+        }
+      }
+      const images = [...imageSet].slice(0, MAX_IMAGES);
+      return Response.json({
+        title: d.title ?? "",
+        description: d.description ?? "",
+        text: [d.title, d.description, d.content].filter(Boolean).join("\n\n").slice(0, MAX_TEXT_CHARS),
+        images,
+        videos: [],
+      });
+    }
+    // Jina failed — fall through to direct fetch.
+  } catch {
+    // Network error on Jina — fall through to direct fetch.
+  }
+
+  // Direct fetch fallback — used when Jina.ai is unavailable.
   let html: string;
   try {
     const ctrl = new AbortController();
@@ -49,10 +119,7 @@ export async function GET(req: NextRequest) {
     });
     clearTimeout(timer);
     if (!res.ok) {
-      return Response.json(
-        { error: `upstream returned ${res.status}` },
-        { status: 502 },
-      );
+      return Response.json({ error: `upstream returned ${res.status}` }, { status: 502 });
     }
     html = await res.text();
   } catch (err) {

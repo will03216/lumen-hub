@@ -228,7 +228,7 @@ export const WebExtractNode = memo(function WebExtractNode({
                       draggable={false}
                       onLoad={(e) => {
                         const img = e.currentTarget as HTMLImageElement;
-                        if (img.naturalWidth < 300 || img.naturalHeight < 300) {
+                        if (img.naturalWidth < 300 && img.naturalHeight < 300) {
                           setTooSmall((prev) => new Set([...prev, src]));
                           // Deselect if already selected
                           if (selectedUrls.has(src)) {

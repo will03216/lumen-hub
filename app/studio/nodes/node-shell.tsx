@@ -212,13 +212,13 @@ export function NodeShell({
   );
 }
 
-/** Spread N handles evenly across 35–65% of card height; single handle stays
- *  centred. Pixel anchoring would be sturdier but cards are dynamic-height
- *  (preview thumbs grow them) and percentage degrades gracefully. */
+/** Spread N handles evenly across 15–85% of card height; single handle stays
+ *  centred. Wider range prevents handles from overlapping node content on tall
+ *  cards (e.g. Article Ingester with generated prompt + narration textareas). */
 function handleTopPercent(index: number, total: number): string {
   if (total <= 1) return "50%";
-  const start = 35;
-  const end = 65;
+  const start = 15;
+  const end = 85;
   const step = (end - start) / (total - 1);
   return `${start + index * step}%`;
 }

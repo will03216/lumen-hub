@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Eye, Image as ImageIcon, Sparkles, Type, Video as VideoIcon, X } from "lucide-react";
+import { Eye, FileText, Globe, Image as ImageIcon, Sparkles, Type, Video as VideoIcon, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { TEMPLATES, type StudioTemplate } from "@/lib/studio/templates";
@@ -159,6 +159,11 @@ const TEMPLATE_FLOWS: Record<string, Array<{ icon: LucideIcon }>> = {
     { icon: ImageIcon },
     { icon: VideoIcon },
     { icon: Eye },
+  ],
+  "article-narration": [
+    { icon: Globe },
+    { icon: FileText },
+    { icon: VideoIcon },
   ],
 };
 

@@ -231,7 +231,7 @@ export async function captionImage(p: CaptionParams): Promise<CaptionResponse> {
 // the Lite model that's already enabled on most accounts).
 
 const PROMPT_MODEL =
-  process.env.BYTEPLUS_PROMPT_MODEL ?? process.env.BYTEPLUS_CAPTION_MODEL ?? "seed-2-0-pro-260228";
+  process.env.BYTEPLUS_PROMPT_MODEL ?? process.env.BYTEPLUS_CAPTION_MODEL ?? "seed-2-0-lite-260228";
 
 export type ScenePromptInput = {
   index: number;

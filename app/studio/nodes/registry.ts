@@ -23,6 +23,8 @@ import { previewSpec } from "./preview-node";
 import { webExtractSpec } from "./web-extract-node";
 import { promptComposerSpec } from "./prompt-composer-node";
 import { longVideoSpec } from "./long-video-node";
+import { articleIngesterSpec } from "./article-ingester-node";
+import { articleNarrationSpec } from "./article-narration-node";
 
 /**
  * The registry is the type-erasure boundary.
@@ -51,6 +53,8 @@ const REGISTRY: Record<NodeTypeId, AnyNodeSpec> = {
   webExtract: webExtractSpec,
   promptComposer: promptComposerSpec,
   longVideo: longVideoSpec,
+  articleIngester: articleIngesterSpec,
+  articleNarration: articleNarrationSpec,
 };
 
 export function getNodeSpec(type: string | undefined): AnyNodeSpec | undefined {

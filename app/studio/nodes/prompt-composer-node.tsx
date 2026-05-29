@@ -301,7 +301,7 @@ export const PromptComposerNode = memo(function PromptComposerNode({
           disabled={composeState.status === "loading"}
           className="nodrag flex-1 rounded-[8px] border border-accent bg-accent-soft px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:opacity-40"
         >
-          {composeState.status === "loading" ? "Composing…" : "Compose with Seed 2.0 Pro"}
+          {composeState.status === "loading" ? "Composing…" : "Compose"}
         </button>
         <button
           type="button"

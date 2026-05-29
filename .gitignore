@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local debug snapshots
+debug/
+
 # Next.js build output
 .next/
 out/
