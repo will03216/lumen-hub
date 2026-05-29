@@ -15,14 +15,32 @@ type IngestBody = {
   systemPrompt?: string;
   shotCount?: number;
   shotDuration?: number;
+  outputLanguage?: string;
+  customOutputLanguage?: string;
 };
 
-function buildUserMessage(content: string, shotCount: number, shotDuration: number): string {
+function resolveLanguageInstruction(outputLanguage = "match", customOutputLanguage = ""): string {
+  if (outputLanguage === "en") return "Respond in English.";
+  if (outputLanguage === "es") return "Respond in Spanish.";
+  if (outputLanguage === "fr") return "Respond in French.";
+  if (outputLanguage === "custom") return customOutputLanguage.trim() || "Respond in the same language as the article.";
+  return "Respond in the same language as the article.";
+}
+
+function buildUserMessage(
+  content: string,
+  shotCount: number,
+  shotDuration: number,
+  outputLanguage = "match",
+  customOutputLanguage = "",
+): string {
   const totalSeconds = shotCount * shotDuration;
   const shotsInstruction =
     shotCount <= 1
       ? `Generate 1 visual shot prompt based on the most compelling aspect of this content.`
       : `Generate exactly ${shotCount} visual shot prompts for a ${totalSeconds}-second video (${shotCount} shots × ${shotDuration}s each). Each prompt describes a single ${shotDuration}-second clip.`;
+
+  const langInstruction = resolveLanguageInstruction(outputLanguage, customOutputLanguage);
 
   return (
     `Here is the article content:\n\n${content}\n\n` +
@@ -32,7 +50,7 @@ function buildUserMessage(content: string, shotCount: number, shotDuration: numb
     `Each sentence must be no longer than ${Math.floor(shotDuration * 1.5)} words to fit within ${shotDuration} seconds of speech. ` +
     `Each sentence must describe what the chef is actively doing in that shot (not quote the article or make general comments about the dish). ` +
     `Natural spoken delivery, present tense.\n\n` +
-    `Respond in the same language as the article.\n\n` +
+    `${langInstruction}\n\n` +
     `Respond with valid JSON only, no markdown fences:\n` +
     `{"shots":["<prompt 1>","<prompt 2>",...],"anchorScript":"<narration>"}`
   );
@@ -86,7 +104,7 @@ export async function POST(req: NextRequest) {
       max_tokens: 2048,
       system: body.systemPrompt.trim(),
       messages: [
-        { role: "user", content: buildUserMessage(content, shotCount, shotDuration) },
+        { role: "user", content: buildUserMessage(content, shotCount, shotDuration, body.outputLanguage, body.customOutputLanguage) },
       ],
     });
 

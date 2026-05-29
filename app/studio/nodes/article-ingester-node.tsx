@@ -18,6 +18,10 @@ export type ArticleIngesterForm = {
   systemPromptPreset: string;
   /** Free-form system prompt used when preset is "custom". */
   customSystemPrompt: string;
+  /** Output language key: "match" | "en" | "es" | "fr" | "custom". */
+  outputLanguage: string;
+  /** Free-form language instruction used when outputLanguage is "custom". */
+  customOutputLanguage: string;
   /** Number of shots to generate (1 = single prompt). */
   shotCount: number;
   /** Duration of each shot in seconds. */
@@ -50,7 +54,7 @@ export const SYSTEM_PROMPT_PRESETS: { id: string; label: string; prompt: string 
     id: "chef",
     label: "Chef / Food",
     prompt:
-      "You are a director for a cooking show. Write each shot as exactly four short sentences — no labels, no numbered structure, no ALL CAPS, no semicolons joining multiple ideas. Sentence 1: subject (chef's appearance, established in shot 1 and repeated verbatim every shot) + one primary action verb + direct object. Sentence 2: one explicit camera move with start and end framing (e.g. 'La cámara arranca en plano medio y realiza un lento push-in hasta primer plano en los 10 segundos'). Sentence 3: kitchen environment — surface material, 2–3 specific props visible in frame, background depth. Sentence 4: lighting and style — describe light colour and direction in plain words (e.g. 'luz cálida lateral izquierda con relleno frontal suave'), then framing style (e.g. 'programa culinario broadcast, profundidad de campo reducida, grano fino'). Do NOT use post-processing terms like 'grado ámbar' or 'color grade' — describe the light itself. Do NOT use Kelvin values. Output in the same language as the article.",
+      "You are a director for a cooking show. Write each shot as exactly four short sentences — no labels, no numbered structure, no ALL CAPS, no semicolons joining multiple ideas. Sentence 1: subject (chef's appearance, established in shot 1 and repeated verbatim every shot) + one primary action verb + direct object. Sentence 2: one explicit camera move with start and end framing (e.g. 'Camera starts mid-shot and slowly pushes in to close-up over 10 seconds'). Sentence 3: kitchen environment — surface material, 2–3 specific props visible in frame, background depth. Sentence 4: lighting and style — describe light colour and direction in plain words (e.g. 'warm side light from the left with soft frontal fill'), then framing style (e.g. 'culinary broadcast, shallow depth of field, fine grain'). Do NOT use post-processing terms like 'amber grade' or 'color grade' — describe the light itself. Do NOT use Kelvin values.",
   },
   {
     id: "generic",
@@ -65,12 +69,36 @@ export const SYSTEM_PROMPT_PRESETS: { id: string; label: string; prompt: string 
   },
 ];
 
-export function buildUserMessage(content: string, shotCount: number, shotDuration: number): string {
+export const LANGUAGE_OPTIONS = [
+  { id: "match", label: "Match article" },
+  { id: "en", label: "English" },
+  { id: "es", label: "Spanish" },
+  { id: "fr", label: "French" },
+  { id: "custom", label: "Custom…" },
+] as const;
+
+export function resolveLanguageInstruction(outputLanguage: string, customOutputLanguage: string): string {
+  if (outputLanguage === "en") return "Respond in English.";
+  if (outputLanguage === "es") return "Respond in Spanish.";
+  if (outputLanguage === "fr") return "Respond in French.";
+  if (outputLanguage === "custom") return customOutputLanguage.trim() || "Respond in the same language as the article.";
+  return "Respond in the same language as the article.";
+}
+
+export function buildUserMessage(
+  content: string,
+  shotCount: number,
+  shotDuration: number,
+  outputLanguage = "match",
+  customOutputLanguage = "",
+): string {
   const totalSeconds = shotCount * shotDuration;
   const shotsInstruction =
     shotCount <= 1
       ? `Generate 1 visual shot prompt based on the most compelling aspect of this content.`
       : `Generate exactly ${shotCount} visual shot prompts for a ${totalSeconds}-second video (${shotCount} shots × ${shotDuration}s each). Each prompt describes a single ${shotDuration}-second clip.`;
+
+  const langInstruction = resolveLanguageInstruction(outputLanguage, customOutputLanguage);
 
   return (
     `Here is the article content:\n\n${content}\n\n` +
@@ -80,15 +108,21 @@ export function buildUserMessage(content: string, shotCount: number, shotDuratio
     `Each sentence must be no longer than ${Math.floor(shotDuration * 1.5)} words to fit within ${shotDuration} seconds of speech. ` +
     `Each sentence must describe what the chef is actively doing in that shot (not quote the article or make general comments about the dish). ` +
     `Natural spoken delivery, present tense.\n\n` +
-    `Respond in the same language as the article.\n\n` +
+    `${langInstruction}\n\n` +
     `Respond with valid JSON only, no markdown fences:\n` +
     `{"shots":["<prompt 1>","<prompt 2>",...],"anchorScript":"<narration>"}`
   );
 }
 
-export function resolveSystemPrompt(form: Pick<ArticleIngesterForm, "systemPromptPreset" | "customSystemPrompt">): string {
-  if (form.systemPromptPreset === "custom") return form.customSystemPrompt.trim();
-  return SYSTEM_PROMPT_PRESETS.find((p) => p.id === form.systemPromptPreset)?.prompt ?? SYSTEM_PROMPT_PRESETS[0].prompt;
+export function resolveSystemPrompt(
+  form: Pick<ArticleIngesterForm, "systemPromptPreset" | "customSystemPrompt" | "outputLanguage" | "customOutputLanguage">,
+): string {
+  const base =
+    form.systemPromptPreset === "custom"
+      ? form.customSystemPrompt.trim()
+      : (SYSTEM_PROMPT_PRESETS.find((p) => p.id === form.systemPromptPreset)?.prompt ?? SYSTEM_PROMPT_PRESETS[0].prompt);
+  const langInstruction = resolveLanguageInstruction(form.outputLanguage ?? "match", form.customOutputLanguage ?? "");
+  return `${base} ${langInstruction}`;
 }
 
 export const ArticleIngesterNode = memo(function ArticleIngesterNode({
@@ -161,6 +195,8 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
           systemPrompt,
           shotCount: d.form.shotCount,
           shotDuration: d.form.shotDuration,
+          outputLanguage: d.form.outputLanguage,
+          customOutputLanguage: d.form.customOutputLanguage,
         }),
       });
       const json = (await res.json()) as { error?: string; prompt?: string; narration?: string };
@@ -188,6 +224,8 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
           systemPrompt: resolveSystemPrompt(d.form),
           shotCount: d.form.shotCount,
           shotDuration: d.form.shotDuration,
+          outputLanguage: d.form.outputLanguage,
+          customOutputLanguage: d.form.customOutputLanguage,
         }),
       });
       const data = (await res.json()) as { curl?: string };
@@ -203,6 +241,7 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
   const hasPrompt = d.form.generatedPrompt.length > 0;
   const hasNarration = d.form.narrationText.length > 0;
   const isCustom = d.form.systemPromptPreset === "custom";
+  const isCustomLang = d.form.outputLanguage === "custom";
   const activePresetPrompt = isCustom
     ? null
     : SYSTEM_PROMPT_PRESETS.find((p) => p.id === d.form.systemPromptPreset)?.prompt ?? null;
@@ -281,6 +320,35 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
             onChange={(e) => update({ customSystemPrompt: e.target.value })}
             placeholder="You are a… Output ONLY the prompt text."
             className="nodrag nowheel w-full resize-y rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
+          />
+        )}
+      </div>
+
+      {/* ── Output language ───────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <label className="block">
+          <span className="mb-1 block font-mono text-[9px] uppercase tracking-[0.14em] text-ink-dim">
+            Output Language
+          </span>
+          <select
+            value={d.form.outputLanguage}
+            onChange={(e) =>
+              update({ outputLanguage: e.target.value, generatedPrompt: "", narrationText: "" })
+            }
+            className="nodrag w-full rounded-[8px] border border-border bg-panel px-2 py-1 text-[11px] text-ink focus:border-accent focus:outline-none"
+          >
+            {LANGUAGE_OPTIONS.map(({ id: lid, label }) => (
+              <option key={lid} value={lid}>{label}</option>
+            ))}
+          </select>
+        </label>
+        {isCustomLang && (
+          <input
+            type="text"
+            value={d.form.customOutputLanguage}
+            onChange={(e) => update({ customOutputLanguage: e.target.value, generatedPrompt: "", narrationText: "" })}
+            placeholder="e.g. Respond in Japanese."
+            className="nodrag nowheel w-full rounded-[8px] border border-border bg-panel px-2 py-1 text-[11px] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
           />
         )}
       </div>
@@ -462,13 +530,15 @@ export const articleIngesterSpec: NodeTypeSpec<ArticleIngesterForm> = {
     claudeApiKey: "",
     systemPromptPreset: "news",
     customSystemPrompt: "",
+    outputLanguage: "match",
+    customOutputLanguage: "",
     shotCount: 6,
     shotDuration: 10,
     generatedPrompt: "",
     narrationText: "",
   },
   hashInputs: (form, inputs) =>
-    `ai1:${form.claudeModel}|${form.systemPromptPreset}|${form.customSystemPrompt.slice(0, 60)}|${form.shotCount}|${form.shotDuration}|${form.generatedPrompt.slice(0, 80)}|${form.narrationText.slice(0, 80)}|${(inputs.text ?? form.articleText).slice(0, 120)}|${inputs.url ?? form.articleUrl}`,
+    `ai1:${form.claudeModel}|${form.systemPromptPreset}|${form.customSystemPrompt.slice(0, 60)}|${form.outputLanguage ?? "match"}|${(form.customOutputLanguage ?? "").slice(0, 40)}|${form.shotCount}|${form.shotDuration}|${form.generatedPrompt.slice(0, 80)}|${form.narrationText.slice(0, 80)}|${(inputs.text ?? form.articleText).slice(0, 120)}|${inputs.url ?? form.articleUrl}`,
   execute: async ({ form, inputs, signal, onProgress }) => {
     const articleText = ((inputs.text as string) ?? form.articleText).trim();
     const articleUrl = ((inputs.url as string) ?? form.articleUrl).trim();
@@ -503,6 +573,8 @@ export const articleIngesterSpec: NodeTypeSpec<ArticleIngesterForm> = {
         systemPrompt,
         shotCount: form.shotCount,
         shotDuration: form.shotDuration,
+        outputLanguage: form.outputLanguage,
+        customOutputLanguage: form.customOutputLanguage,
       }),
       signal,
     });

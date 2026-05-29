@@ -36,6 +36,7 @@ export const NODE_TYPE_IDS = [
   "longVideo",
   "articleIngester",
   "articleNarration",
+  "musicOverlay",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 

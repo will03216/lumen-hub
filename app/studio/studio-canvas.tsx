@@ -34,6 +34,7 @@ import { PromptComposerNode } from "./nodes/prompt-composer-node";
 import { LongVideoNode } from "./nodes/long-video-node";
 import { ArticleIngesterNode } from "./nodes/article-ingester-node";
 import { ArticleNarrationNode } from "./nodes/article-narration-node";
+import { MusicOverlayNode } from "./nodes/music-overlay-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -57,6 +58,7 @@ const nodeTypes: NodeTypes = {
   longVideo: LongVideoNode,
   articleIngester: ArticleIngesterNode,
   articleNarration: ArticleNarrationNode,
+  musicOverlay: MusicOverlayNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with
