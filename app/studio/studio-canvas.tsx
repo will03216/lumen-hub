@@ -35,6 +35,7 @@ import { LongVideoNode } from "./nodes/long-video-node";
 import { ArticleIngesterNode } from "./nodes/article-ingester-node";
 import { ArticleNarrationNode } from "./nodes/article-narration-node";
 import { MusicOverlayNode } from "./nodes/music-overlay-node";
+import { VideoStitchNode } from "./nodes/video-stitch-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -59,6 +60,7 @@ const nodeTypes: NodeTypes = {
   articleIngester: ArticleIngesterNode,
   articleNarration: ArticleNarrationNode,
   musicOverlay: MusicOverlayNode,
+  videoStitch: VideoStitchNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with
@@ -107,6 +109,10 @@ function hydrate(projectId: string): {
         ...(getNodeSpec(n.type)?.defaults ?? {}),
         ...(n.data.form ?? {}),
       } as Record<string, unknown>,
+      // Restore persisted generation results so videos/images survive reload.
+      ...(n.data.outputs ? { outputs: n.data.outputs } : {}),
+      ...(n.data.lastRunHash ? { lastRunHash: n.data.lastRunHash } : {}),
+      ...(n.data.status ? { status: n.data.status } : {}),
     },
   }));
   const edges = project.canvas.edges.map<Edge>((e) => ({

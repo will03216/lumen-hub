@@ -21,7 +21,12 @@ export type PersistedNode = {
   id: string;
   type: string;
   position: { x: number; y: number };
-  data: { form: unknown };
+  data: {
+    form: unknown;
+    outputs?: Record<string, string | undefined>;
+    lastRunHash?: string;
+    status?: "idle" | "succeeded" | "failed";
+  };
 };
 
 export type PersistedEdge = {
