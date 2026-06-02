@@ -49,7 +49,8 @@ export function resolveModel(id: string): string {
   return MODEL_ALIASES[id] ?? id;
 }
 
-function apiKey() {
+function apiKey(override?: string): string {
+  if (override) return override;
   const key = process.env.BYTEPLUS_API_KEY ?? process.env.ARK_API_KEY;
   if (!key) {
     throw new Error(
@@ -84,12 +85,12 @@ export class BytePlusError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit): Promise<T> {
+async function request<T>(path: string, init: RequestInit, keyOverride?: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey()}`,
+      Authorization: `Bearer ${apiKey(keyOverride)}`,
       ...(init.headers ?? {}),
     },
     cache: "no-store",
@@ -135,7 +136,7 @@ export type ImageGenResponse = {
   usage?: Record<string, unknown>;
 };
 
-export async function generateImage(params: ImageGenParams) {
+export async function generateImage(params: ImageGenParams, apiKey?: string) {
   const body: Record<string, unknown> = {
     model: resolveModel(params.model ?? IMAGE_MODEL),
     response_format: "url",
@@ -157,7 +158,7 @@ export async function generateImage(params: ImageGenParams) {
   return request<ImageGenResponse>("/images/generations", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, apiKey);
 }
 
 // ---------- Caption (§65) ----------
@@ -191,7 +192,7 @@ subject and action, lens and framing, light and mood, film stock or era,
 color palette. One sentence, present tense, no preamble, no quotes, no
 "this image shows". Aim for 25-40 words.`;
 
-export async function captionImage(p: CaptionParams): Promise<CaptionResponse> {
+export async function captionImage(p: CaptionParams, apiKey?: string): Promise<CaptionResponse> {
   const body = {
     model: resolveModel(CAPTION_MODEL),
     messages: [
@@ -211,7 +212,7 @@ export async function captionImage(p: CaptionParams): Promise<CaptionResponse> {
   }>("/chat/completions", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, apiKey);
   const raw = out.choices?.[0]?.message?.content?.trim();
   if (!raw) {
     throw new BytePlusError(502, "Bad Gateway", "no caption in response");
@@ -259,6 +260,7 @@ Rules:
 export async function generateScenePrompts(
   storyPrompt: string,
   scenes: ScenePromptInput[],
+  apiKey?: string,
 ): Promise<ScenePromptOutput[]> {
   const userMessage = `STORY:\n${storyPrompt.trim()}\n\nSCENES:\n${scenes
     .map((s) => `[${s.index}] (${s.duration}s) ${s.script.trim() || "(no script yet)"}`)
@@ -276,7 +278,7 @@ export async function generateScenePrompts(
 
   const out = await request<{
     choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) });
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
 
   const raw = out.choices?.[0]?.message?.content?.trim();
   if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
@@ -309,7 +311,7 @@ KEY MOMENTS: <numbered list of 3–10 specific, visual, filmable moments in narr
 VISUAL STYLE: <lighting, palette, setting — e.g. "warm kitchen, natural morning light, neutral tones">
 REFERENCE SUBJECTS: <any specific people, objects, or places that must appear consistently>`;
 
-async function distilConcept(rawText: string): Promise<string> {
+async function distilConcept(rawText: string, apiKey?: string): Promise<string> {
   const body = {
     model: resolveModel(PROMPT_MODEL),
     messages: [
@@ -321,7 +323,7 @@ async function distilConcept(rawText: string): Promise<string> {
   };
   const out = await request<{
     choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) });
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
   const raw = out.choices?.[0]?.message?.content?.trim();
   if (!raw) throw new BytePlusError(502, "Bad Gateway", "no distilled concept");
   return raw;
@@ -406,13 +408,13 @@ export type ShotPlanOutput = {
   brief?: string;
 };
 
-export async function generateShots(p: ShotPlanInput): Promise<ShotPlanOutput> {
+export async function generateShots(p: ShotPlanInput, apiKey?: string): Promise<ShotPlanOutput> {
   const inputConcept = p.concept.trim();
 
   // Long-form text (article, recipe, web extract) needs distillation first so the
   // shot planner gets a structured brief rather than a wall of prose.
   const concept = inputConcept.length > DISTILL_THRESHOLD
-    ? await distilConcept(inputConcept)
+    ? await distilConcept(inputConcept, apiKey)
     : inputConcept;
 
   const refImageCount = p.referenceImageCount ?? 0;
@@ -447,7 +449,7 @@ export async function generateShots(p: ShotPlanInput): Promise<ShotPlanOutput> {
 
   const out = await request<{
     choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) });
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
 
   const responseText = out.choices?.[0]?.message?.content?.trim();
   if (!responseText) throw new BytePlusError(502, "Bad Gateway", "no content in response");
@@ -504,6 +506,7 @@ Write a clear, detailed generation prompt based on the user's goal and provided 
 
 export async function composePrompt(
   p: ComposePromptParams,
+  apiKey?: string,
 ): Promise<ComposePromptResponse> {
   type ContentBlock =
     | { type: "text"; text: string }
@@ -553,7 +556,7 @@ export async function composePrompt(
 
   const out = await request<{
     choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) });
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
 
   const raw = out.choices?.[0]?.message?.content?.trim();
   if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
@@ -734,11 +737,11 @@ function buildVideoRequestBody(params: VideoParams): Record<string, unknown> {
   return body;
 }
 
-export async function createVideoTask(params: VideoParams) {
+export async function createVideoTask(params: VideoParams, apiKey?: string) {
   return request<VideoTaskResponse>("/contents/generations/tasks", {
     method: "POST",
     body: JSON.stringify(buildVideoRequestBody(params)),
-  });
+  }, apiKey);
 }
 
 /** Returns a copy-paste ready curl command that reproduces the exact BytePlus
@@ -760,8 +763,8 @@ export function buildVideoCurl(params: VideoParams): string {
   ].join("\n");
 }
 
-export async function getVideoTask(id: string) {
+export async function getVideoTask(id: string, apiKey?: string) {
   return request<VideoTaskStatus>(`/contents/generations/tasks/${id}`, {
     method: "GET",
-  });
+  }, apiKey);
 }

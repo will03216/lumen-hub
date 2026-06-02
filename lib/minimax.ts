@@ -37,7 +37,8 @@ import type { VideoParams, VideoTaskResponse, VideoTaskStatus } from "./byteplus
 
 const BASE_URL = process.env.MINIMAX_BASE_URL ?? "https://api.minimax.io/v1";
 
-function apiKey(): string {
+function apiKey(override?: string): string {
+  if (override) return override;
   const key = process.env.MINIMAX_API_KEY;
   if (!key) {
     throw new Error(
@@ -50,7 +51,8 @@ function apiKey(): string {
 /** Only required by /v1/files/retrieve and /v1/t2a_v2. We throw lazily
  *  so submit/status calls don't fail just because the GroupId isn't set
  *  yet — the user only feels the gap when an actual file URL is needed. */
-function groupId(): string {
+function groupId(override?: string): string {
+  if (override) return override;
   const id = process.env.MINIMAX_GROUP_ID;
   if (!id) {
     throw new Error(
@@ -80,12 +82,13 @@ export class MinimaxError extends Error {
 async function mxRequest<T = unknown>(
   path: string,
   init: RequestInit,
+  keyOverride?: string,
 ): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey()}`,
+      Authorization: `Bearer ${apiKey(keyOverride)}`,
       ...(init.headers ?? {}),
     },
     cache: "no-store",
@@ -154,6 +157,7 @@ type MxCreateResponse = {
  *  layer treats it identically to BytePlus's response. */
 export async function createVideoTaskMinimax(
   p: VideoParams,
+  keys?: { apiKey?: string },
 ): Promise<VideoTaskResponse> {
   const body: Record<string, unknown> = {
     model: p.model,
@@ -175,7 +179,7 @@ export async function createVideoTaskMinimax(
   const out = await mxRequest<MxCreateResponse>("/video_generation", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, keys?.apiKey);
   if (!out.task_id) {
     throw new MinimaxError(502, "Bad Gateway", "missing task_id in submit response");
   }
@@ -210,10 +214,11 @@ type MxFileRetrieveResponse = {
 /** Poll a task. On success we make a second call to /files/retrieve to
  *  resolve the actual download URL, and stitch both into a single
  *  VideoTaskStatus so the route's poll branch stays a single call. */
-export async function getVideoTaskMinimax(id: string): Promise<VideoTaskStatus> {
+export async function getVideoTaskMinimax(id: string, keys?: { apiKey?: string; groupId?: string }): Promise<VideoTaskStatus> {
   const q = await mxRequest<MxQueryResponse>(
     `/query/video_generation?task_id=${encodeURIComponent(id)}`,
     { method: "GET" },
+    keys?.apiKey,
   );
   const status = mapStatus(q.status);
   if (status !== "succeeded") {
@@ -233,8 +238,9 @@ export async function getVideoTaskMinimax(id: string): Promise<VideoTaskStatus> 
     };
   }
   const file = await mxRequest<MxFileRetrieveResponse>(
-    `/files/retrieve?GroupId=${encodeURIComponent(groupId())}&file_id=${encodeURIComponent(q.file_id)}`,
+    `/files/retrieve?GroupId=${encodeURIComponent(groupId(keys?.groupId))}&file_id=${encodeURIComponent(q.file_id)}`,
     { method: "GET" },
+    keys?.apiKey,
   );
   const url = file.file?.download_url;
   if (!url) {
@@ -313,6 +319,7 @@ type MxAudioResponse = {
  *  and survives indefinitely. */
 export async function generateAudioMinimax(
   p: AudioGenParams,
+  keys?: { apiKey?: string; groupId?: string },
 ): Promise<{ audioBytes: Buffer; durationSec: number; format: string }> {
   const body: Record<string, unknown> = {
     model: p.model ?? "speech-2.8-hd",
@@ -336,8 +343,9 @@ export async function generateAudioMinimax(
   };
   // t2a_v2 wants GroupId as a URL param, not a header.
   const out = await mxRequest<MxAudioResponse>(
-    `/t2a_v2?GroupId=${encodeURIComponent(groupId())}`,
+    `/t2a_v2?GroupId=${encodeURIComponent(groupId(keys?.groupId))}`,
     { method: "POST", body: JSON.stringify(body) },
+    keys?.apiKey,
   );
   const hex = out.data?.audio;
   if (!hex) {

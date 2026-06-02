@@ -4,7 +4,7 @@ import {
   Inter_Tight,
   JetBrains_Mono,
 } from "next/font/google";
-import { AuthProvider } from "@/lib/cloud/auth";
+import { ClerkProvider } from '@clerk/nextjs';
 import "./globals.css";
 
 const serif = Instrument_Serif({
@@ -46,10 +46,7 @@ export default function RootLayout({
       className={`${serif.variable} ${sans.variable} ${mono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        {/* AuthProvider is a no-op when Supabase env isn't configured —
-            see lib/cloud/auth.tsx. Wrapping the whole tree means any
-            client component can call useAuth() and get a sane default. */}
-        <AuthProvider>{children}</AuthProvider>
+        <ClerkProvider>{children}</ClerkProvider>
       </body>
     </html>
   );

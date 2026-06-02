@@ -38,3 +38,6 @@ public/library-cache/
 
 # Misc
 .vercel
+
+# clerk configuration (can include secrets)
+/.clerk/
