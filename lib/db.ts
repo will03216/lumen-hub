@@ -1,15 +1,23 @@
 import { Pool } from 'pg'
 
 declare global {
-  // Persist pool across hot-reloads in dev
   // eslint-disable-next-line no-var
   var __pgPool: Pool | undefined
 }
 
-function createPool(): Pool {
-  const url = process.env.DATABASE_URL
-  if (!url) throw new Error('DATABASE_URL is not set')
-  return new Pool({ connectionString: url, max: 10, idleTimeoutMillis: 30_000 })
+function getPool(): Pool {
+  if (!globalThis.__pgPool) {
+    const url = process.env.DATABASE_URL
+    if (!url) throw new Error('DATABASE_URL is not set')
+    globalThis.__pgPool = new Pool({ connectionString: url, max: 10, idleTimeoutMillis: 30_000 })
+  }
+  return globalThis.__pgPool
 }
 
-export const db: Pool = globalThis.__pgPool ?? (globalThis.__pgPool = createPool())
+// Proxy defers pool creation until the first actual method call (e.g. db.query).
+// This means importing lib/db at build time is safe even without DATABASE_URL set.
+export const db = new Proxy({} as Pool, {
+  get(_target, prop) {
+    return Reflect.get(getPool(), prop)
+  },
+})
