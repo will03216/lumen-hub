@@ -1,21 +1,22 @@
 /**
  * Studio Spaces — multi-project store (localStorage).
  *
- * Schema v2 wraps the canvas in a project envelope so the user can keep
- * multiple workspaces side-by-side (a la Freepik's My Spaces). Every
- * project is fully self-contained: name, timestamps, optional template
- * provenance, and its own canvas snapshot.
+ * Schema v3 adds folders so projects can be grouped per customer / campaign.
+ * Each folder is a lightweight record; projects carry an optional `folderId`
+ * foreign-key. All writes go through `writeStore` which busts the snapshot
+ * cache and notifies `useSyncExternalStore` subscribers.
  *
- * Migration from v1
- * -----------------
- *   v1 stored a single canvas under `lumen.studio.canvas.v1`. On the first
- *   read of v2, if v1 is present and v2 is empty, we wrap the v1 canvas
- *   into an "Untitled" project, persist it, then delete the v1 key. This
- *   runs idempotently and lazily — no side effects on import.
+ * Migration chain
+ * ---------------
+ *   v1 → v2  Single canvas → multi-project envelope (see v2 notes)
+ *   v2 → v3  Adds `folders: {}` to the store; projects gain optional `folderId`
  */
 
-const STORAGE_KEY = "lumen.studio.projects.v2";
+const STORAGE_KEY = "lumen.studio.projects.v3";
+const V2_KEY = "lumen.studio.projects.v2";
 const LEGACY_KEY = "lumen.studio.canvas.v1";
+
+// ─────────────────────────── Types ─────────────────────────────────────
 
 export type PersistedNode = {
   id: string;
@@ -42,6 +43,12 @@ export type CanvasShape = {
   edges: PersistedEdge[];
 };
 
+export type Folder = {
+  id: string;
+  name: string;
+  createdAt: number;
+};
+
 export type ProjectMeta = {
   id: string;
   name: string;
@@ -49,6 +56,8 @@ export type ProjectMeta = {
   updatedAt: number;
   /** Provenance — the template id used at creation (or undefined for blank). */
   templateId?: string;
+  /** Folder this project belongs to (undefined = unfiled). */
+  folderId?: string;
 };
 
 export type Project = ProjectMeta & {
@@ -56,24 +65,24 @@ export type Project = ProjectMeta & {
 };
 
 type StoreShape = {
-  version: 2;
+  version: 3;
   projects: Record<string, Project>;
+  folders: Record<string, Folder>;
 };
 
-const EMPTY_STORE: StoreShape = { version: 2, projects: {} };
+const EMPTY_STORE: StoreShape = { version: 3, projects: {}, folders: {} };
 
 // ─────────────────────────── Storage I/O ───────────────────────────────
 
 function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
-  // Always run migration first so subsequent reads see the merged state.
   migrateLegacyIfNeeded();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { version: 2, projects: {} };
+    if (!raw) return { version: 3, projects: {}, folders: {} };
     const parsed = JSON.parse(raw) as StoreShape;
-    if (parsed.version !== 2 || !parsed.projects) return EMPTY_STORE;
-    return parsed;
+    if (parsed.version !== 3 || !parsed.projects) return EMPTY_STORE;
+    return { ...parsed, folders: parsed.folders ?? {} };
   } catch {
     return EMPTY_STORE;
   }
@@ -86,24 +95,17 @@ function writeStore(store: StoreShape): void {
   } catch {
     // Quota exceeded, private mode, etc. Persistence is best-effort.
   }
-  // Bust the snapshot cache and notify any subscribers (the dashboard
-  // uses `useSyncExternalStore` to redraw after every mutation).
   cachedList = null;
+  cachedFolders = null;
   listeners.forEach((cb) => cb());
 }
 
 // ─────────────────────── Subscription / cache ───────────────────────────
-//
-// A tiny external store façade so React can subscribe via
-// `useSyncExternalStore` without a setState-in-effect anti-pattern. The
-// snapshot is cached to satisfy the hook's stable-identity requirement —
-// `getSnapshot` MUST return the same array reference until something
-// actually changed, otherwise React would treat every render as a fresh
-// store update and infinite-loop.
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
 let cachedList: ProjectMeta[] | null = null;
+let cachedFolders: Folder[] | null = null;
 
 export function subscribeProjects(cb: Listener): () => void {
   listeners.add(cb);
@@ -113,30 +115,49 @@ export function subscribeProjects(cb: Listener): () => void {
 }
 
 export function getProjectsSnapshot(): ProjectMeta[] {
-  // Stable identity is required by `useSyncExternalStore` — recomputing
-  // a fresh array on every call would loop the hook. Cache busts only
-  // when `writeStore` runs (i.e. an actual mutation).
   if (cachedList === null) cachedList = listProjects();
   return cachedList;
 }
 
-/** SSR snapshot for `useSyncExternalStore`. Returns `null` (stable
- *  sentinel) so the server pass matches the dashboard's "loading…"
- *  skeleton, and React only swaps in the populated client snapshot once
- *  hydration has run. Avoids both a setState-in-effect anti-pattern and
- *  a flash of "empty state" on devices with cached projects. */
 export function getProjectsServerSnapshot(): ProjectMeta[] | null {
   return null;
 }
 
+export function getFoldersSnapshot(): Folder[] {
+  if (cachedFolders === null) cachedFolders = listFolders();
+  return cachedFolders;
+}
+
+export function getFoldersServerSnapshot(): Folder[] | null {
+  return null;
+}
+
+// ─────────────────────── Migration ─────────────────────────────────────
+
 function migrateLegacyIfNeeded(): void {
   if (typeof window === "undefined") return;
   try {
-    // If v2 already populated, nothing to do.
-    const v2raw = localStorage.getItem(STORAGE_KEY);
-    const v2 = v2raw ? (JSON.parse(v2raw) as StoreShape) : null;
-    if (v2 && v2.projects && Object.keys(v2.projects).length > 0) return;
+    // If v3 already has data, nothing to do.
+    const v3raw = localStorage.getItem(STORAGE_KEY);
+    const v3 = v3raw ? (JSON.parse(v3raw) as StoreShape) : null;
+    if (v3 && v3.projects && Object.keys(v3.projects).length > 0) return;
 
+    // Migrate from v2 (multi-project, no folders)
+    const v2raw = localStorage.getItem(V2_KEY);
+    if (v2raw) {
+      const v2 = JSON.parse(v2raw) as { version: 2; projects: Record<string, Project> };
+      if (v2?.version === 2 && v2.projects) {
+        const store: StoreShape = {
+          version: 3,
+          projects: v2.projects,
+          folders: {},
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+        return;
+      }
+    }
+
+    // Migrate from v1 (single canvas)
     const legacyRaw = localStorage.getItem(LEGACY_KEY);
     if (!legacyRaw) return;
     const legacy = JSON.parse(legacyRaw) as {
@@ -159,19 +180,18 @@ function migrateLegacyIfNeeded(): void {
       canvas: { nodes: legacy.nodes ?? [], edges: legacy.edges ?? [] },
     };
     const store: StoreShape = {
-      version: 2,
+      version: 3,
       projects: { [id]: project },
+      folders: {},
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
     localStorage.removeItem(LEGACY_KEY);
   } catch {
-    // Legacy data corrupted — drop it silently. Worst case the user loses
-    // their pre-v2 single canvas, but they would have lost it on the next
-    // schema bump anyway.
+    // Legacy data corrupted — drop it silently.
   }
 }
 
-// ─────────────────────────── Public API ────────────────────────────────
+// ─────────────────────────── Project API ───────────────────────────────
 
 export function listProjects(): ProjectMeta[] {
   const store = readStore();
@@ -182,6 +202,7 @@ export function listProjects(): ProjectMeta[] {
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
       templateId: p.templateId,
+      folderId: p.folderId,
     }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -195,6 +216,7 @@ export function createProject(opts: {
   name?: string;
   templateId?: string;
   canvas?: CanvasShape;
+  folderId?: string;
 } = {}): Project {
   const store = readStore();
   const now = Date.now();
@@ -205,6 +227,7 @@ export function createProject(opts: {
     createdAt: now,
     updatedAt: now,
     templateId: opts.templateId,
+    folderId: opts.folderId,
     canvas: opts.canvas ?? { nodes: [], edges: [] },
   };
   store.projects[id] = project;
@@ -219,9 +242,6 @@ export function updateProject(
   const store = readStore();
   const existing = store.projects[id];
   if (!existing) return null;
-  // Skip the touch-update if nothing actually changed — the canvas autosave
-  // fires on every node movement and would otherwise jitter `updatedAt` by
-  // a few ms on every drag tick.
   const next: Project = {
     ...existing,
     ...(patch.name !== undefined ? { name: patch.name.trim() || "Untitled" } : {}),
@@ -246,8 +266,64 @@ export function duplicateProject(id: string): Project | null {
   return createProject({
     name: `${src.name} (copy)`,
     templateId: src.templateId,
+    folderId: src.folderId,
     canvas: deepCopyCanvas(src.canvas),
   });
+}
+
+export function moveProjectToFolder(
+  projectId: string,
+  folderId: string | null,
+): void {
+  const store = readStore();
+  const project = store.projects[projectId];
+  if (!project) return;
+  store.projects[projectId] = {
+    ...project,
+    folderId: folderId ?? undefined,
+    updatedAt: Date.now(),
+  };
+  writeStore(store);
+}
+
+// ─────────────────────────── Folder API ────────────────────────────────
+
+export function listFolders(): Folder[] {
+  const store = readStore();
+  return Object.values(store.folders).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export function createFolder(name: string): Folder {
+  const store = readStore();
+  const folder: Folder = {
+    id: newProjectId(),
+    name: name.trim() || "Untitled Folder",
+    createdAt: Date.now(),
+  };
+  store.folders[folder.id] = folder;
+  writeStore(store);
+  return folder;
+}
+
+export function renameFolder(id: string, name: string): void {
+  const store = readStore();
+  const folder = store.folders[id];
+  if (!folder) return;
+  store.folders[id] = { ...folder, name: name.trim() || folder.name };
+  writeStore(store);
+}
+
+export function deleteFolder(id: string): void {
+  const store = readStore();
+  if (!store.folders[id]) return;
+  delete store.folders[id];
+  // Unassign all projects that belonged to this folder.
+  for (const project of Object.values(store.projects)) {
+    if (project.folderId === id) {
+      store.projects[project.id] = { ...project, folderId: undefined };
+    }
+  }
+  writeStore(store);
 }
 
 // ─────────────────────────── Helpers ───────────────────────────────────
@@ -260,7 +336,5 @@ function newProjectId(): string {
 }
 
 function deepCopyCanvas(canvas: CanvasShape): CanvasShape {
-  // structuredClone is React 19 / Node 18+ standard and handles every shape
-  // we ever put in `data.form` (strings, numbers, booleans, plain objects).
   return structuredClone(canvas);
 }
