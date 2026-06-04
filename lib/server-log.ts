@@ -24,6 +24,7 @@ export type RouteTag =
   | "video.create"
   | "video.poll"
   | "audio"
+  | "audio.upload"
   | "caption"
   | "story.generate-prompts"
   | "story.generate-shots"

@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const { buffer, contentType } = await fetchRemote(raw);
-    return new Response(buffer, {
+    return new Response(buffer as unknown as BodyInit, {
       status: 200,
       headers: {
         "Content-Type": contentType,
