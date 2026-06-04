@@ -180,9 +180,7 @@ export function addAsset(input: CreateAssetInput): Asset {
     ...store,
     assets: { ...store.assets, [id]: asset },
   });
-  // Cloud mirror — fires only when the user is signed in (see asset-sync.ts).
-  // Dynamic import keeps the supabase client out of the bundle for users
-  // who never enable cloud sync.
+  // Cloud mirror — fire-and-forget write-through to BytePlus RDS (see asset-sync.ts).
   void cloudUpsert(asset);
   return asset;
 }
