@@ -272,6 +272,17 @@ function StudioCanvasInner({ projectId }: { projectId: string }) {
   const handleRunAll = useCallback(() => {
     void startRun("all");
   }, [startRun]);
+
+  const handleRerunAll = useCallback(() => {
+    // Strip cached hashes so the runner treats every node as stale.
+    const stripped = nodesRef.current.map((n) => ({
+      ...n,
+      data: { ...n.data, lastRunHash: undefined },
+    }));
+    nodesRef.current = stripped;
+    setNodes(stripped);
+    void startRun("all");
+  }, [startRun, setNodes]);
   const handleRunNode = useCallback(
     (id: string) => {
       void startRun("node", id);
@@ -348,6 +359,7 @@ function StudioCanvasInner({ projectId }: { projectId: string }) {
             running={running}
             runningNodeId={runningNodeId}
             onRunAll={handleRunAll}
+            onRerunAll={handleRerunAll}
             onCancel={handleCancel}
             onClear={handleClear}
           />

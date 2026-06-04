@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useReactFlow, type NodeProps } from "@xyflow/react";
 import { NodeShell } from "./node-shell";
 import type { NodeTypeSpec, StudioNodeData } from "../types";
@@ -25,6 +26,7 @@ export const TextPromptNode = memo(function TextPromptNode({
 }: NodeProps) {
   const { setNodes } = useReactFlow();
   const d = data as StudioNodeData<TextPromptForm>;
+  const [expanded, setExpanded] = useState(false);
 
   const update = useCallback(
     (patch: Partial<TextPromptForm>) => {
@@ -49,13 +51,23 @@ export const TextPromptNode = memo(function TextPromptNode({
       data={d}
       selected={selected ?? false}
     >
-      <textarea
-        rows={4}
-        value={d.form.text}
-        onChange={(e) => update({ text: e.target.value })}
-        placeholder="Describe the frame…"
-        className="nodrag nowheel w-full resize-none rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[12px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
-      />
+      <div className="relative">
+        <textarea
+          rows={expanded ? 14 : 4}
+          value={d.form.text}
+          onChange={(e) => update({ text: e.target.value })}
+          placeholder="Describe the frame…"
+          className="nodrag nowheel w-full resize-none rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[12px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="nodrag absolute bottom-1.5 right-1.5 flex size-4 items-center justify-center rounded text-ink-mute transition-colors hover:text-accent"
+          title={expanded ? "Collapse" : "Expand"}
+        >
+          {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+        </button>
+      </div>
       <div className="flex flex-wrap gap-1">
         {SUGGESTIONS.map((s, i) => (
           <button

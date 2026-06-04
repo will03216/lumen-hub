@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useDraggable } from "@dnd-kit/core";
 import {
   Copy,
   Eye,
+  Folder,
+  GripVertical,
   Image as ImageIcon,
   Pencil,
   Trash2,
@@ -17,31 +20,21 @@ import { findTemplate } from "@/lib/studio/templates";
 
 type Props = {
   project: ProjectMeta;
+  folderName?: string;
   onRename: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onMove: () => void;
 };
 
-/**
- * Single project tile for the My Studio dashboard.
- *
- * The card itself is a Link that opens the canvas; action buttons in the
- * footer use stopPropagation+preventDefault so the wrapping anchor never
- * navigates when the user clicks a tool. We deliberately don't render a
- * live thumbnail of the graph — getting a faithful tiny preview of React
- * Flow takes a hidden offscreen mount per card, which is excessive for a
- * dashboard. The node-type chip strip below is enough signal.
- */
 export function ProjectCard({
   project,
+  folderName,
   onRename,
   onDuplicate,
   onDelete,
+  onMove,
 }: Props) {
-  // The dashboard supplies just the meta; for the chip strip we need to
-  // peek at canvas.nodes types. Reading from the store here is cheap (just
-  // a localStorage parse, dashboard fits 12+ cards comfortably) and keeps
-  // the dashboard's render fast.
   const full = getProject(project.id);
   const nodes = full?.canvas.nodes ?? [];
   const edgeCount = full?.canvas.edges.length ?? 0;
@@ -49,26 +42,47 @@ export function ProjectCard({
     ? findTemplate(project.templateId)
     : undefined;
 
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: project.id,
+    data: { project },
+  });
+
   return (
-    <Link
-      href={`/studio/${project.id}`}
-      className="group relative flex h-[224px] flex-col border border-border bg-bg-2 transition-colors hover:border-accent"
+    <div
+      className={`group relative flex h-[224px] flex-col border border-border bg-bg-2 transition-colors hover:border-accent ${
+        isDragging ? "opacity-40 ring-1 ring-accent" : ""
+      }`}
     >
       <CornerTicks />
 
-      {/* Top half — provenance label + node type chips */}
-      <div className="flex flex-1 flex-col justify-between p-4">
+      {/* Navigation overlay — covers the whole card; buttons above it intercept clicks */}
+      <Link
+        href={`/studio/${project.id}`}
+        aria-label={`Open ${project.name}`}
+        className="absolute inset-0"
+      />
+
+      {/* Top half — pointer-events-none so the absolute Link underneath receives clicks */}
+      <div className="relative flex flex-1 flex-col justify-between p-4 pointer-events-none">
         <div className="flex items-center justify-between gap-2">
-          {template ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-dim">
-              {template.badge} · {template.name}
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
-              Custom
-            </span>
-          )}
-          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            {template ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-dim">
+                {template.badge} · {template.name}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
+                Custom
+              </span>
+            )}
+            {folderName && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-accent">
+                <Folder className="size-2.5" />
+                {folderName}
+              </span>
+            )}
+          </div>
+          <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
             {nodes.length} · {edgeCount}
           </span>
         </div>
@@ -91,9 +105,9 @@ export function ProjectCard({
         </div>
       </div>
 
-      {/* Bottom half — name + meta + actions */}
-      <div className="flex items-end justify-between gap-3 border-t border-border bg-panel/50 px-4 py-3">
-        <div className="min-w-0 flex-1">
+      {/* Bottom half — name is pointer-events-none (link handles it); buttons are auto */}
+      <div className="relative flex items-end justify-between gap-3 border-t border-border bg-panel/50 px-4 py-3">
+        <div className="pointer-events-none min-w-0 flex-1">
           <p className="truncate font-serif text-[16px] italic text-ink">
             {project.name}
           </p>
@@ -102,37 +116,24 @@ export function ProjectCard({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
-          <ActionIcon
-            icon={Pencil}
-            label="Rename"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onRename();
-            }}
-          />
-          <ActionIcon
-            icon={Copy}
-            label="Duplicate"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDuplicate();
-            }}
-          />
-          <ActionIcon
-            icon={Trash2}
-            label="Delete"
-            danger
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-          />
+          <button
+            ref={setNodeRef}
+            type="button"
+            aria-label="Drag to move into folder"
+            title="Drag to move into folder"
+            {...attributes}
+            {...listeners}
+            className="inline-flex size-7 cursor-grab items-center justify-center rounded-full border border-border bg-panel text-ink-dim transition-colors hover:border-accent hover:text-accent active:cursor-grabbing"
+          >
+            <GripVertical className="size-3.5" />
+          </button>
+          <ActionIcon icon={Pencil} label="Rename" onClick={onRename} />
+          <ActionIcon icon={Copy} label="Duplicate" onClick={onDuplicate} />
+          <ActionIcon icon={Folder} label="Move to folder" onClick={onMove} />
+          <ActionIcon icon={Trash2} label="Delete" onClick={onDelete} danger />
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 
@@ -165,15 +166,15 @@ function ActionIcon({
 }: {
   icon: LucideIcon;
   label: string;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: () => void;
   danger?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
       title={label}
       aria-label={label}
+      onClick={onClick}
       className={
         danger
           ? "inline-flex size-7 items-center justify-center rounded-full border border-border bg-panel text-ink-dim transition-colors hover:border-[oklch(0.65_0.22_25)] hover:text-[oklch(0.78_0.20_25)]"
@@ -196,10 +197,6 @@ function CornerTicks() {
   );
 }
 
-/** Compact relative formatter — handles the four buckets that matter
- *  for an editor (now / minutes / hours / days), then falls back to a
- *  dated string. We avoid Intl.RelativeTimeFormat so the bundle stays
- *  free of the locale data shim. */
 function formatRelative(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
   const sec = Math.round(diffMs / 1000);

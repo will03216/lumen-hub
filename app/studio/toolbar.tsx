@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Play, Square, Trash2 } from "lucide-react";
+import { Loader2, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 
 /**
  * Top bar: project name (click to rename), status counter, Run all / Stop / Clear.
@@ -22,6 +22,7 @@ export function Toolbar({
   running,
   runningNodeId,
   onRunAll,
+  onRerunAll,
   onCancel,
   onClear,
 }: {
@@ -32,6 +33,7 @@ export function Toolbar({
   running: boolean;
   runningNodeId: string | null;
   onRunAll: () => void;
+  onRerunAll: () => void;
   onCancel: () => void;
   onClear: () => void;
 }) {
@@ -70,14 +72,25 @@ export function Toolbar({
             <Square className="size-3 fill-current" /> Stop
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={onRunAll}
-            disabled={nodeCount === 0}
-            className="inline-flex items-center gap-1.5 rounded-full border border-accent bg-accent px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-accent-ink transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Play className="size-3 fill-current" /> Run all
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={onRerunAll}
+              disabled={nodeCount === 0}
+              title="Re-run all nodes, ignoring cached results"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-panel px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:border-border disabled:hover:text-ink-dim"
+            >
+              <RotateCcw className="size-3" /> Re-run all
+            </button>
+            <button
+              type="button"
+              onClick={onRunAll}
+              disabled={nodeCount === 0}
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent bg-accent px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-accent-ink transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Play className="size-3 fill-current" /> Run all
+            </button>
+          </>
         )}
       </div>
     </div>
