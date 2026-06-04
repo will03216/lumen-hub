@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/ui/wordmark";
 import { useAuth } from "@/lib/cloud/auth";
@@ -30,7 +31,7 @@ const NAV = [
 
 export function SiteHeader() {
   const pathname = usePathname();
-  const { status, user } = useAuth();
+  const { status } = useAuth();
   return (
     <header
       className="sticky top-0 z-40 border-b border-border backdrop-blur-[14px]"
@@ -82,15 +83,8 @@ export function SiteHeader() {
               Sign in →
             </Link>
           )}
-          {status === "signed-in" && user && (
-            <Link
-              href="/sign-in"
-              title={user.email ?? "Account"}
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-border bg-panel/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink hover:border-ink-dim"
-            >
-              <span className="size-1.5 rounded-full bg-ok" />
-              {accountInitials(user.email ?? "")}
-            </Link>
+          {status === "signed-in" && (
+            <UserButton />
           )}
           <Button size="sm" variant="default" className="hidden sm:inline-flex">
             <span className="font-mono text-[10px] tracking-[0.12em]">⌘K</span>
@@ -104,11 +98,3 @@ export function SiteHeader() {
   );
 }
 
-/** Two-letter chip for the auth pill. Uses the local-part of the email
- *  rather than the full address — keeps the header compact and avoids
- *  exposing more identity than necessary in screen shares. */
-function accountInitials(email: string): string {
-  const local = email.split("@")[0] ?? "";
-  if (!local) return "··";
-  return local.slice(0, 2).toUpperCase();
-}
