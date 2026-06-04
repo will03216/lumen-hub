@@ -11,6 +11,7 @@ import {
   logFalError,
   logRouteError,
 } from "@/lib/server-log";
+import { getUserKeys } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 // 5 minutes — covers gpt-image-2 at quality:"high" with margin. BytePlus
@@ -27,6 +28,7 @@ export async function POST(req: NextRequest) {
   let promptLen = 0;
   let model: string | undefined;
   try {
+    const keys = await getUserKeys();
     const body = (await req.json()) as Partial<ImageGenParams>;
     promptLen = typeof body.prompt === "string" ? body.prompt.length : 0;
     model = body.model;
@@ -55,7 +57,7 @@ export async function POST(req: NextRequest) {
             // independent. So num_images stays 1 here.
             num_images: 1,
             image: body.image,
-          })
+          }, keys.fal)
         : await generateImage({
             prompt: body.prompt,
             model: body.model,
@@ -65,7 +67,7 @@ export async function POST(req: NextRequest) {
             image: body.image,
             sequential: body.sequential,
             max_images: body.max_images,
-          });
+          }, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
     // Forward upstream HTTP status 1:1 so the client classifier can

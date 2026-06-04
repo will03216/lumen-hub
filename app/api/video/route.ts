@@ -11,6 +11,7 @@ import {
   logMinimaxError,
   logRouteError,
 } from "@/lib/server-log";
+import { getUserKeys } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -20,6 +21,7 @@ export async function POST(req: NextRequest) {
   let promptLen = 0;
   let model: string | undefined;
   try {
+    const keys = await getUserKeys();
     const body = (await req.json()) as Partial<VideoParams>;
     promptLen = typeof body.prompt === "string" ? body.prompt.length : 0;
     model = body.model;
@@ -50,7 +52,7 @@ export async function POST(req: NextRequest) {
             audio: body.audio,
             images: body.images,
             references: body.references,
-          })
+          }, { apiKey: keys.minimax })
         : await createVideoTask({
             prompt: body.prompt,
             model: body.model,
@@ -64,7 +66,7 @@ export async function POST(req: NextRequest) {
             images: body.images,
             videos: body.videos,
             references: body.references,
-          });
+          }, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
     // Preserve upstream HTTP status so the client classifier can route

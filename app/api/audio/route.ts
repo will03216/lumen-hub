@@ -31,6 +31,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MinimaxError, generateAudioMinimax } from "@/lib/minimax";
 import { findAudioModel, MAX_AUDIO_TEXT_LEN } from "@/lib/studio/models";
 import { logMinimaxError, logRouteError } from "@/lib/server-log";
+import { getUserKeys } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 // TTS at 3000 chars takes ~10-30s upstream; cap the route so a hung
@@ -93,6 +94,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { minimax: minimaxKey, minimaxGroupId } = await getUserKeys();
     const { audioBytes, durationSec, format } = await generateAudioMinimax({
       text: body.text,
       voiceId: body.voice_id,
@@ -101,7 +103,7 @@ export async function POST(req: NextRequest) {
       volume: body.volume,
       pitch: body.pitch,
       emotion: body.emotion,
-    });
+    }, { apiKey: minimaxKey, groupId: minimaxGroupId });
 
     // Hash input → idempotent filename. Same script + voice + dials
     // collide on disk, which matches the §60 contract for stage* (one
