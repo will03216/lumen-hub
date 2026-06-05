@@ -5,6 +5,7 @@ import {
   JetBrains_Mono,
 } from "next/font/google";
 import { ClerkProvider } from '@clerk/nextjs';
+import { StorageUserInit } from '@/components/StorageUserInit';
 import "./globals.css";
 
 const serif = Instrument_Serif({
@@ -46,7 +47,10 @@ export default function RootLayout({
       className={`${serif.variable} ${sans.variable} ${mono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        <ClerkProvider>{children}</ClerkProvider>
+        <ClerkProvider>
+          <StorageUserInit />
+          {children}
+        </ClerkProvider>
       </body>
     </html>
   );

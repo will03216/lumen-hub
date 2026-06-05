@@ -12,9 +12,11 @@
  *   v2 → v3  Adds `folders: {}` to the store; projects gain optional `folderId`
  */
 
-const STORAGE_KEY = "lumen.studio.projects.v3";
-const V2_KEY = "lumen.studio.projects.v2";
-const LEGACY_KEY = "lumen.studio.canvas.v1";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.studio.projects.v3");
+const V2_KEY = () => userKey("lumen.studio.projects.v2");
+const LEGACY_KEY = () => userKey("lumen.studio.canvas.v1");
 
 // ─────────────────────────── Types ─────────────────────────────────────
 
@@ -78,7 +80,7 @@ function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
   migrateLegacyIfNeeded();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 3, projects: {}, folders: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 3 || !parsed.projects) return EMPTY_STORE;
@@ -91,7 +93,7 @@ function readStore(): StoreShape {
 function writeStore(store: StoreShape): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
   } catch {
     // Quota exceeded, private mode, etc. Persistence is best-effort.
   }
@@ -138,12 +140,12 @@ function migrateLegacyIfNeeded(): void {
   if (typeof window === "undefined") return;
   try {
     // If v3 already has data, nothing to do.
-    const v3raw = localStorage.getItem(STORAGE_KEY);
+    const v3raw = localStorage.getItem(STORAGE_KEY());
     const v3 = v3raw ? (JSON.parse(v3raw) as StoreShape) : null;
     if (v3 && v3.projects && Object.keys(v3.projects).length > 0) return;
 
     // Migrate from v2 (multi-project, no folders)
-    const v2raw = localStorage.getItem(V2_KEY);
+    const v2raw = localStorage.getItem(V2_KEY());
     if (v2raw) {
       const v2 = JSON.parse(v2raw) as { version: 2; projects: Record<string, Project> };
       if (v2?.version === 2 && v2.projects) {
@@ -152,13 +154,13 @@ function migrateLegacyIfNeeded(): void {
           projects: v2.projects,
           folders: {},
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+        localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
         return;
       }
     }
 
     // Migrate from v1 (single canvas)
-    const legacyRaw = localStorage.getItem(LEGACY_KEY);
+    const legacyRaw = localStorage.getItem(LEGACY_KEY());
     if (!legacyRaw) return;
     const legacy = JSON.parse(legacyRaw) as {
       version: 1;
@@ -166,7 +168,7 @@ function migrateLegacyIfNeeded(): void {
       edges: PersistedEdge[];
     };
     if (legacy?.version !== 1) {
-      localStorage.removeItem(LEGACY_KEY);
+      localStorage.removeItem(LEGACY_KEY());
       return;
     }
 
@@ -184,8 +186,8 @@ function migrateLegacyIfNeeded(): void {
       projects: { [id]: project },
       folders: {},
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-    localStorage.removeItem(LEGACY_KEY);
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
+    localStorage.removeItem(LEGACY_KEY());
   } catch {
     // Legacy data corrupted — drop it silently.
   }

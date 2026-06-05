@@ -24,7 +24,9 @@
  * but baked into the schema so future commits don't migrate again.
  */
 
-const STORAGE_KEY = "lumen.library.assets.v1";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.library.assets.v1");
 
 export type AssetKind = "image" | "video" | "audio" | "reference";
 export type AssetSource = "generated" | "uploaded" | "imported";
@@ -103,7 +105,7 @@ const EMPTY_STORE: StoreShape = { version: 1, assets: {} };
 function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 1, assets: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 1 || !parsed.assets) return EMPTY_STORE;
@@ -121,7 +123,7 @@ function writeStore(store: StoreShape): void {
   // not for thousands. The migration path is straight: replace this
   // body with an idb-keyval put, keep the rest of the API.
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
   } catch {
     // Quota / serialization failures swallowed by design — we'd rather
     // drop a write than crash the page; the in-memory cache still has
@@ -295,7 +297,7 @@ export function __resetForTests(): void {
   listeners.clear();
   if (typeof window !== "undefined") {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY());
     } catch {
       // ignore
     }
