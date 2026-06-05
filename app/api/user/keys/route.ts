@@ -14,7 +14,7 @@ import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
 
-const VALID_PROVIDERS = ['byteplus', 'fal', 'minimax', 'minimax_group_id'] as const
+const VALID_PROVIDERS = ['byteplus', 'byteplus_ak', 'byteplus_sk', 'fal', 'minimax', 'minimax_group_id'] as const
 type Provider = typeof VALID_PROVIDERS[number]
 
 // ── GET ─────────────────────────────────────────────────────────────────────

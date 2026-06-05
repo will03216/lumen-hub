@@ -4,22 +4,34 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
-// Maps UI field IDs to the provider names the API expects
 const FIELD_TO_PROVIDER = {
   byteplusApiKey: 'byteplus',
-  falApiKey: 'fal',
-  minimaxApiKey: 'minimax',
-  minimaxGroupId: 'minimax_group_id',
+  byteplusAk:     'byteplus_ak',
+  bytelusSk:      'byteplus_sk',
 } as const
 
 type FieldId = keyof typeof FIELD_TO_PROVIDER
 type Provider = (typeof FIELD_TO_PROVIDER)[FieldId]
 
-const FIELDS: { id: FieldId; label: string; placeholder: string; hint?: string }[] = [
-  { id: 'byteplusApiKey', label: 'BytePlus API Key', placeholder: 'bp-...', hint: 'console.byteplus.com → API Keys' },
-  { id: 'falApiKey', label: 'fal.ai API Key', placeholder: 'key_id:key_secret', hint: 'fal.ai/dashboard/keys' },
-  { id: 'minimaxApiKey', label: 'MiniMax API Key', placeholder: '...', hint: 'platform.minimax.io → API Keys' },
-  { id: 'minimaxGroupId', label: 'MiniMax Group ID', placeholder: '...', hint: 'platform.minimax.io → Basic Information' },
+const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[] = [
+  {
+    id: 'byteplusApiKey',
+    label: 'API Key',
+    placeholder: 'bp-...',
+    hint: 'console.byteplus.com/ark → API Keys',
+  },
+  {
+    id: 'byteplusAk',
+    label: 'Access Key',
+    placeholder: 'AK...',
+    hint: 'console.byteplus.com → IAM → Access Keys',
+  },
+  {
+    id: 'bytelusSk',
+    label: 'Secret Key',
+    placeholder: 'SK...',
+    hint: 'console.byteplus.com → IAM → Access Keys',
+  },
 ]
 
 type Hints = Partial<Record<Provider, string | null>>
@@ -31,11 +43,11 @@ export default function SettingsPage() {
   const isSetup = searchParams.get('setup') === '1'
 
   const [values, setValues] = useState<Record<FieldId, string>>({
-    byteplusApiKey: '', falApiKey: '', minimaxApiKey: '', minimaxGroupId: '',
+    byteplusApiKey: '', byteplusAk: '', bytelusSk: '',
   })
   const [hints, setHints] = useState<Hints>({})
   const [visible, setVisible] = useState<Record<FieldId, boolean>>({
-    byteplusApiKey: false, falApiKey: false, minimaxApiKey: false, minimaxGroupId: false,
+    byteplusApiKey: false, byteplusAk: false, bytelusSk: false,
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Provider | null>(null)
@@ -53,15 +65,11 @@ export default function SettingsPage() {
       const { keys } = (await res.json()) as { keys: Hints }
       setHints(keys)
     } catch {
-      // non-critical — hints are display-only
+      // non-critical
     }
   }, [])
 
   useEffect(() => { loadHints() }, [loadHints])
-
-  function toggleVisible(id: FieldId) {
-    setVisible((prev) => ({ ...prev, [id]: !prev[id] }))
-  }
 
   async function handleSave() {
     const payload: Partial<Record<Provider, string>> = {}
@@ -86,13 +94,9 @@ export default function SettingsPage() {
         showToast('error', error ?? 'Failed to save keys.')
         return
       }
-      // Clear inputs and reload hints
-      setValues({ byteplusApiKey: '', falApiKey: '', minimaxApiKey: '', minimaxGroupId: '' })
+      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '' })
       await loadHints()
-      if (isSetup) {
-        router.push('/')
-        return
-      }
+      if (isSetup) { router.push('/'); return }
       showToast('success', 'Keys saved.')
     } catch {
       showToast('error', 'Network error — please try again.')
@@ -126,7 +130,6 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
       <div className="border-b border-border px-6 py-4 flex items-center gap-4">
         <Link href="/" className="text-sm text-ink-dim hover:text-ink transition-colors">
           ← Back
@@ -140,23 +143,23 @@ export default function SettingsPage() {
           <div className="mb-8 rounded-lg border border-blue-800 bg-blue-950/50 px-5 py-4">
             <p className="text-sm font-medium text-blue-300 mb-1">Welcome to Lumen Hub</p>
             <p className="text-sm text-blue-400/80">
-              Add your BytePlus API key to get started. You can find it at{' '}
+              Add your BytePlus credentials to get started. You can find them at{' '}
               <a
-                href="https://console.byteplus.com/ark"
+                href="https://console.byteplus.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-blue-300"
               >
-                console.byteplus.com/ark
+                console.byteplus.com
               </a>
               .
             </p>
           </div>
         )}
 
-        <h1 className="text-2xl font-semibold mb-1">API Keys</h1>
+        <h1 className="text-2xl font-semibold mb-1">BytePlus Credentials</h1>
         <p className="text-sm text-ink-dim mb-8">
-          Your keys are encrypted with AES-256-GCM before storage. They are never logged or shared.
+          Encrypted with AES-256-GCM before storage. Never logged or shared.
         </p>
 
         <div className="space-y-6">
@@ -200,16 +203,14 @@ export default function SettingsPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => toggleVisible(id)}
+                    onClick={() => setVisible((prev) => ({ ...prev, [id]: !prev[id] }))}
                     className="absolute right-3 text-zinc-500 hover:text-zinc-300 transition-colors text-xs select-none"
                     tabIndex={-1}
                   >
                     {visible[id] ? 'Hide' : 'Show'}
                   </button>
                 </div>
-                {hint && (
-                  <p className="mt-1 text-[11px] text-zinc-600">{hint}</p>
-                )}
+                <p className="mt-1 text-[11px] text-zinc-600">{hint}</p>
               </div>
             )
           })}
@@ -221,13 +222,12 @@ export default function SettingsPage() {
           disabled={saving}
           className="mt-8 w-full bg-white text-black font-medium text-sm py-2.5 rounded-lg hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? 'Saving…' : isSetup ? 'Save Keys & Enter App →' : 'Save Keys'}
+          {saving ? 'Saving…' : isSetup ? 'Save & Enter App →' : 'Save Keys'}
         </button>
 
-        {/* Toast */}
         {toast && (
           <div
-            className={`mt-4 px-4 py-3 rounded-lg text-sm text-center transition-all ${
+            className={`mt-4 px-4 py-3 rounded-lg text-sm text-center ${
               toast.type === 'success'
                 ? 'bg-green-950 text-green-400 border border-green-900'
                 : 'bg-red-950 text-red-400 border border-red-900'
