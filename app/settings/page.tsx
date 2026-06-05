@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
 // Maps UI field IDs to the provider names the API expects
@@ -25,6 +26,10 @@ type Hints = Partial<Record<Provider, string | null>>
 type Toast = { type: 'success' | 'error'; message: string }
 
 export default function SettingsPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const isSetup = searchParams.get('setup') === '1'
+
   const [values, setValues] = useState<Record<FieldId, string>>({
     byteplusApiKey: '', falApiKey: '', minimaxApiKey: '', minimaxGroupId: '',
   })
@@ -84,6 +89,10 @@ export default function SettingsPage() {
       // Clear inputs and reload hints
       setValues({ byteplusApiKey: '', falApiKey: '', minimaxApiKey: '', minimaxGroupId: '' })
       await loadHints()
+      if (isSetup) {
+        router.push('/')
+        return
+      }
       showToast('success', 'Keys saved.')
     } catch {
       showToast('error', 'Network error — please try again.')
@@ -127,6 +136,24 @@ export default function SettingsPage() {
       </div>
 
       <div className="max-w-xl mx-auto px-6 py-12">
+        {isSetup && (
+          <div className="mb-8 rounded-lg border border-blue-800 bg-blue-950/50 px-5 py-4">
+            <p className="text-sm font-medium text-blue-300 mb-1">Welcome to Lumen Hub</p>
+            <p className="text-sm text-blue-400/80">
+              Add your BytePlus API key to get started. You can find it at{' '}
+              <a
+                href="https://console.byteplus.com/ark"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-blue-300"
+              >
+                console.byteplus.com/ark
+              </a>
+              .
+            </p>
+          </div>
+        )}
+
         <h1 className="text-2xl font-semibold mb-1">API Keys</h1>
         <p className="text-sm text-ink-dim mb-8">
           Your keys are encrypted with AES-256-GCM before storage. They are never logged or shared.
@@ -194,7 +221,7 @@ export default function SettingsPage() {
           disabled={saving}
           className="mt-8 w-full bg-white text-black font-medium text-sm py-2.5 rounded-lg hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? 'Saving…' : 'Save Keys'}
+          {saving ? 'Saving…' : isSetup ? 'Save Keys & Enter App →' : 'Save Keys'}
         </button>
 
         {/* Toast */}
