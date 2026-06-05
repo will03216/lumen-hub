@@ -12,7 +12,7 @@ export default function SignUpPage() {
     <>
       <SiteHeader />
       <main className="mx-auto w-full max-w-[640px] px-4 py-16 md:px-7 md:py-24 flex justify-center">
-        <SignUp />
+        <SignUp forceRedirectUrl="/onboarding" />
       </main>
     </>
   );
