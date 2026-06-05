@@ -600,11 +600,10 @@ export function buildComposeCurl(p: ComposePromptParams): string {
   };
 
   const endpoint = `${BASE_URL}/chat/completions`;
-  const key = process.env.BYTEPLUS_API_KEY ?? process.env.ARK_API_KEY ?? "<BYTEPLUS_API_KEY>";
   const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
   return [
     `curl -X POST '${endpoint}' \\`,
-    `  -H 'Authorization: Bearer ${key}' \\`,
+    `  -H 'Authorization: Bearer <YOUR_BYTEPLUS_API_KEY>' \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -d '${json}'`,
   ].join("\n");
@@ -750,14 +749,12 @@ export async function createVideoTask(params: VideoParams, apiKey?: string) {
 export function buildVideoCurl(params: VideoParams): string {
   const body = buildVideoRequestBody(params);
   const endpoint = `${BASE_URL}/contents/generations/tasks`;
-  const key =
-    process.env.BYTEPLUS_API_KEY ?? process.env.ARK_API_KEY ?? "<BYTEPLUS_API_KEY>";
   // Pretty-print then escape single quotes for bash (the only char that can't
   // appear inside a single-quoted string unescaped).
   const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
   return [
     `curl -X POST '${endpoint}' \\`,
-    `  -H 'Authorization: Bearer ${key}' \\`,
+    `  -H 'Authorization: Bearer <YOUR_BYTEPLUS_API_KEY>' \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -d '${json}'`,
   ].join("\n");
