@@ -15,16 +15,17 @@ const BLOCKED_HOSTNAMES = new Set([
 ])
 
 const PRIVATE_IP_RE = [
-  /^127\./,                              // loopback
-  /^0\./,                                // 0.0.0.0/8
-  /^10\./,                               // RFC 1918
-  /^192\.168\./,                         // RFC 1918
-  /^172\.(1[6-9]|2[0-9]|3[01])\./,      // RFC 1918
-  /^169\.254\./,                         // link-local / cloud metadata
-  /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./,  // CGNAT RFC 6598
-  /^::1$/,                               // IPv6 loopback
-  /^fc[0-9a-f]{2}:/i,                   // IPv6 unique local
-  /^fe[89ab][0-9a-f]:/i,               // IPv6 link-local
+  /^127\./,                                        // loopback
+  /^0\./,                                          // 0.0.0.0/8
+  /^10\./,                                         // RFC 1918
+  /^192\.168\./,                                   // RFC 1918
+  /^172\.(1[6-9]|2[0-9]|3[01])\./,                // RFC 1918
+  /^169\.254\./,                                   // link-local / cloud metadata
+  /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./,   // CGNAT RFC 6598
+  /^::1$/,                                         // IPv6 loopback
+  /^fc[0-9a-f]{2}:/i,                              // IPv6 unique local
+  /^fe[89ab][0-9a-f]:/i,                           // IPv6 link-local
+  /^::ffff:(127\.|10\.|192\.168\.|169\.254\.)/i,   // IPv4-mapped IPv6
 ]
 
 /** Throws if the URL targets a private/metadata address.

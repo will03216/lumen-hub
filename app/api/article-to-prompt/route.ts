@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { logRouteError } from "@/lib/server-log";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -57,6 +58,7 @@ function buildUserMessage(
 }
 
 async function fetchArticleText(url: string): Promise<string> {
+  assertSafeUrl(new URL(url));
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; LumenHub/1.0)" },
   });

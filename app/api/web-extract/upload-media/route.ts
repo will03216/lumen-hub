@@ -13,6 +13,7 @@
 
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 import type { NextRequest } from "next/server";
 import {
   uploadToTos,
@@ -70,8 +71,9 @@ function downloadViaNodeHttp(
         if (status >= 300 && status < 400 && res.headers.location) {
           res.resume();
           if (redirectsLeft <= 0) { reject(new Error("Too many redirects")); return; }
-          const next = new URL(res.headers.location, url).toString();
-          downloadViaNodeHttp(next, headers, redirectsLeft - 1).then(resolve).catch(reject);
+          const nextUrl = new URL(res.headers.location, url);
+          try { assertSafeUrl(nextUrl); } catch (e) { reject(e); return; }
+          downloadViaNodeHttp(nextUrl.toString(), headers, redirectsLeft - 1).then(resolve).catch(reject);
           return;
         }
 
@@ -128,6 +130,7 @@ export async function POST(req: NextRequest) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return Response.json({ error: "http/https only" }, { status: 400 });
   }
+  try { assertSafeUrl(parsed); } catch { return Response.json({ error: "blocked" }, { status: 403 }); }
 
   // ── 1. Download ────────────────────────────────────────────────────────────
   const downloadHeaders: Record<string, string> = {
