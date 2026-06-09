@@ -38,3 +38,5 @@ public/library-cache/
 
 # Misc
 .vercel
+.clerk/
+.env.production
