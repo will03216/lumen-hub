@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import ffmpegStatic from "ffmpeg-static";
 import Ffmpeg from "fluent-ffmpeg";
 import { uploadToTos } from "@/lib/modelark";
+import { getUserKeys, missingKeyResponse, keyErrorResponse } from "@/lib/server/user-keys";
 import { logRouteError } from "@/lib/server-log";
 
 export const runtime = "nodejs";
@@ -41,6 +42,11 @@ export async function POST(req: NextRequest) {
     if (!body.audioUrl?.trim()) {
       return NextResponse.json({ error: "audioUrl is required" }, { status: 400 });
     }
+
+    const { byteplusAk: ak, bytelusSk: sk, byteplusTosBucket: bucket } = await getUserKeys();
+    if (!ak) return missingKeyResponse("byteplus_ak");
+    if (!sk) return missingKeyResponse("byteplus_sk");
+    if (!bucket) return missingKeyResponse("byteplus_tos_bucket");
 
     await fs.mkdir(workDir, { recursive: true });
     if (ffmpegStatic) Ffmpeg.setFfmpegPath(ffmpegStatic);
@@ -97,10 +103,12 @@ export async function POST(req: NextRequest) {
     });
 
     const outputBuf = await fs.readFile(outputPath);
-    const publicUrl = await uploadToTos(outputBuf, "video/mp4", "narration-video.mp4");
+    const publicUrl = await uploadToTos(outputBuf, "video/mp4", "narration-video.mp4", { ak, sk, bucket });
 
     return NextResponse.json({ url: publicUrl });
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     logRouteError("video.stitch", err, startedAt);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

@@ -31,7 +31,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MinimaxError, generateAudioMinimax } from "@/lib/minimax";
 import { findAudioModel, MAX_AUDIO_TEXT_LEN } from "@/lib/studio/models";
 import { logMinimaxError, logRouteError } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 // TTS at 3000 chars takes ~10-30s upstream; cap the route so a hung
@@ -133,6 +133,8 @@ export async function POST(req: NextRequest) {
       data: [{ url, durationSec }],
     });
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof MinimaxError) {
       logMinimaxError("audio", err, startedAt, {
         text_len: textLen,

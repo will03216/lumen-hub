@@ -1,3 +1,5 @@
+import { MissingKeyError } from "@/lib/server/missing-key";
+
 const BASE_URL =
   process.env.BYTEPLUS_BASE_URL ??
   "https://ark.ap-southeast.bytepluses.com/api/v3";
@@ -50,14 +52,9 @@ export function resolveModel(id: string): string {
 }
 
 function apiKey(override?: string): string {
-  if (override) return override;
-  const key = process.env.BYTEPLUS_API_KEY ?? process.env.ARK_API_KEY;
-  if (!key) {
-    throw new Error(
-      "Missing BYTEPLUS_API_KEY. Set it in .env.local (see .env.local.example).",
-    );
-  }
-  return key;
+  // Strict BYOK — no env fallback. The user's key must be supplied per call.
+  if (!override) throw new MissingKeyError("byteplus");
+  return override;
 }
 
 /**

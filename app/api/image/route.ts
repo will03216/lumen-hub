@@ -11,7 +11,7 @@ import {
   logFalError,
   logRouteError,
 } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 // 5 minutes — covers gpt-image-2 at quality:"high" with margin. BytePlus
@@ -70,6 +70,10 @@ export async function POST(req: NextRequest) {
           }, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    // Strict BYOK — a missing user key surfaces as 402 so the client can
+    // prompt the user to add it in Settings, not as an opaque 500.
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     // Forward upstream HTTP status 1:1 so the client classifier can
     // dispatch on it — 429 → rate-limit, 400 → invalid-input, 5xx →
     // transient. Collapsing everything to 500 (previous behaviour)

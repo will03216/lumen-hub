@@ -34,32 +34,23 @@
  */
 
 import type { VideoParams, VideoTaskResponse, VideoTaskStatus } from "./byteplus";
+import { MissingKeyError } from "@/lib/server/missing-key";
 
 const BASE_URL = process.env.MINIMAX_BASE_URL ?? "https://api.minimax.io/v1";
 
 function apiKey(override?: string): string {
-  if (override) return override;
-  const key = process.env.MINIMAX_API_KEY;
-  if (!key) {
-    throw new Error(
-      "Missing MINIMAX_API_KEY. Set it in .env.local (see .env.local.example).",
-    );
-  }
-  return key;
+  // Strict BYOK — no env fallback. The user's key must be supplied per call.
+  if (!override) throw new MissingKeyError("minimax");
+  return override;
 }
 
 /** Only required by /v1/files/retrieve and /v1/t2a_v2. We throw lazily
  *  so submit/status calls don't fail just because the GroupId isn't set
  *  yet — the user only feels the gap when an actual file URL is needed. */
 function groupId(override?: string): string {
-  if (override) return override;
-  const id = process.env.MINIMAX_GROUP_ID;
-  if (!id) {
-    throw new Error(
-      "Missing MINIMAX_GROUP_ID. Required for fetching rendered files. Set it in .env.local (see Basic Information at https://platform.minimax.io).",
-    );
-  }
-  return id;
+  // Strict BYOK — no env fallback. The user's group id must be supplied per call.
+  if (!override) throw new MissingKeyError("minimax_group_id");
+  return override;
 }
 
 /** Same shape as BytePlusError / FalError so server-log and the client

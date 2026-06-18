@@ -30,18 +30,14 @@
  */
 
 import type { ImageGenResponse } from "./byteplus";
+import { MissingKeyError } from "@/lib/server/missing-key";
 
 const QUEUE_BASE = "https://queue.fal.run";
 
 function apiKey(override?: string): string {
-  if (override) return override;
-  const key = process.env.FAL_API_KEY;
-  if (!key) {
-    throw new Error(
-      "Missing FAL_API_KEY. Set it in .env.local (see .env.local.example).",
-    );
-  }
-  return key;
+  // Strict BYOK — no env fallback. The user's key must be supplied per call.
+  if (!override) throw new MissingKeyError("fal");
+  return override;
 }
 
 /** Same status surface as BytePlusError so `lib/server-log` and the

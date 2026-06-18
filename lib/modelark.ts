@@ -19,17 +19,19 @@
 
 import { createHash, createHmac } from "crypto";
 import { randomUUID } from "crypto";
+import { MissingKeyError } from "@/lib/server/missing-key";
 
 // ─────────────────────────── Config ──────────────────────────────────────
+// Strict BYOK: AK/SK and the TOS bucket are per-user credentials (no env
+// fallback). Host/region/service/version remain shared infra config (env).
 
-function cfg(key: string, override?: string): string {
-  if (override) return override;
-  const v = process.env[key];
-  if (!v) throw new Error(`Missing env var ${key} — add it to .env.local`);
-  return v;
+/** Require a per-user credential; throw a typed 402-mappable error if absent. */
+function required(provider: string, value?: string): string {
+  if (!value) throw new MissingKeyError(provider);
+  return value;
 }
 
-type Credentials = { ak: string; sk: string };
+export type Credentials = { ak: string; sk: string; bucket?: string };
 
 function getHost()      { return process.env.MODELARK_HOST       ?? "open.byteplusapi.com"; }
 function getRegion()    { return process.env.MODELARK_REGION     ?? "ap-southeast-1"; }
@@ -82,8 +84,8 @@ function signRequest(params: {
   ak?: string;
   sk?: string;
 }): Record<string, string> {
-  const ak = cfg("MODELARK_AK", params.ak);
-  const sk = cfg("MODELARK_SK", params.sk);
+  const ak = required("byteplus_ak", params.ak);
+  const sk = required("byteplus_sk", params.sk);
   const { method, host, path, canonicalQuery, service, region, extraHeaders, bodyHash } = params;
 
   const now = new Date();
@@ -133,8 +135,8 @@ function signTosRequest(params: {
   ak?: string;
   sk?: string;
 }): Record<string, string> {
-  const ak = cfg("MODELARK_AK", params.ak);
-  const sk = cfg("MODELARK_SK", params.sk);
+  const ak = required("byteplus_ak", params.ak);
+  const sk = required("byteplus_sk", params.sk);
   const { method, host, path, canonicalQuery, region, extraHeaders, bodyHash } = params;
 
   const now = new Date();
@@ -270,7 +272,7 @@ export async function uploadToTos(
   originalFilename: string,
   creds?: Credentials,
 ): Promise<string> {
-  const bucket = cfg("MODELARK_TOS_BUCKET");
+  const bucket = required("byteplus_tos_bucket", creds?.bucket);
   const storageRegion = getRegion();
   const signingRegion = getTosRegion();
   // BytePlus TOS overseas endpoint: tos-{storage-region}.bytepluses.com

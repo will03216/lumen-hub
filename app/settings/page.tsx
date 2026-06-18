@@ -1,13 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
 const FIELD_TO_PROVIDER = {
-  byteplusApiKey: 'byteplus',
-  byteplusAk:     'byteplus_ak',
-  bytelusSk:      'byteplus_sk',
+  byteplusApiKey:    'byteplus',
+  byteplusAk:        'byteplus_ak',
+  bytelusSk:         'byteplus_sk',
+  byteplusTosBucket: 'byteplus_tos_bucket',
 } as const
 
 type FieldId = keyof typeof FIELD_TO_PROVIDER
@@ -32,22 +33,37 @@ const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[
     placeholder: 'SK...',
     hint: 'console.byteplus.com → IAM → Access Keys',
   },
+  {
+    id: 'byteplusTosBucket',
+    label: 'TOS Bucket',
+    placeholder: 'my-bucket',
+    hint: 'console.byteplus.com → TOS → Buckets (public-read, your own bucket)',
+  },
 ]
 
 type Hints = Partial<Record<Provider, string | null>>
 type Toast = { type: 'success' | 'error'; message: string }
 
 export default function SettingsPage() {
+  // useSearchParams requires a Suspense boundary during prerender.
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <SettingsForm />
+    </Suspense>
+  )
+}
+
+function SettingsForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const isSetup = searchParams.get('setup') === '1'
 
   const [values, setValues] = useState<Record<FieldId, string>>({
-    byteplusApiKey: '', byteplusAk: '', bytelusSk: '',
+    byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '',
   })
   const [hints, setHints] = useState<Hints>({})
   const [visible, setVisible] = useState<Record<FieldId, boolean>>({
-    byteplusApiKey: false, byteplusAk: false, bytelusSk: false,
+    byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false,
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Provider | null>(null)
@@ -94,7 +110,7 @@ export default function SettingsPage() {
         showToast('error', error ?? 'Failed to save keys.')
         return
       }
-      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '' })
+      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '' })
       await loadHints()
       if (isSetup) { router.push('/'); return }
       showToast('success', 'Keys saved.')

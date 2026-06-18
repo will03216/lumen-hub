@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAsset, ModelArkError } from "@/lib/modelark";
+import { getUserKeys, missingKeyResponse, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 // base64-encoded images can be large; raise the body limit beyond the 4 MB default
@@ -30,10 +31,16 @@ export async function POST(req: NextRequest) {
   if (!groupId) return NextResponse.json({ error: "groupId is required" }, { status: 400 });
   if (!url) return NextResponse.json({ error: "url is required" }, { status: 400 });
 
+  const { byteplusAk: ak, bytelusSk: sk } = await getUserKeys();
+  if (!ak) return missingKeyResponse("byteplus_ak");
+  if (!sk) return missingKeyResponse("byteplus_sk");
+
   try {
-    const assetId = await createAsset(groupId, url, assetType);
+    const assetId = await createAsset(groupId, url, assetType, { ak, sk });
     return NextResponse.json({ assetId }, { status: 201 });
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof ModelArkError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.status ?? 500 });
     }

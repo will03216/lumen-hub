@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BytePlusError, captionImage } from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -74,6 +74,8 @@ export async function POST(req: NextRequest) {
     }, byteplus);
     return NextResponse.json(out);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof BytePlusError) {
       logBytePlusError("caption", err, startedAt, { source: imageHint });
       return NextResponse.json(

@@ -7,7 +7,7 @@ import {
   logMinimaxError,
   logRouteError,
 } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 
@@ -38,6 +38,8 @@ export async function GET(
         : await getVideoTask(id, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     // Forward upstream status so the classifier can route 404 →
     // "task-expired", 429 → rate-limit, etc.
     if (err instanceof BytePlusError) {

@@ -11,7 +11,7 @@ import {
   logMinimaxError,
   logRouteError,
 } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
           }, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     // Preserve upstream HTTP status so the client classifier can route
     // it (see app/api/image/route.ts for the rationale). Each upstream
     // gets its own log channel — the Vercel filter can answer "are we
