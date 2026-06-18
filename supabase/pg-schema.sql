@@ -31,6 +31,18 @@ CREATE TABLE IF NOT EXISTS studio_projects (
 CREATE INDEX IF NOT EXISTS studio_projects_user_id_updated_at_idx
   ON studio_projects (user_id, updated_at DESC);
 
+-- ── Studio folders ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS studio_folders (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  payload     JSONB NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS studio_folders_user_id_updated_at_idx
+  ON studio_folders (user_id, updated_at DESC);
+
 -- ── User API keys ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_api_keys (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

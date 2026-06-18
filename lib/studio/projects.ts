@@ -13,6 +13,13 @@
  */
 
 import { userKey } from '@/lib/storage-user';
+import {
+  syncProjectUpsert,
+  syncProjectDelete,
+  syncFolderUpsert,
+  syncFolderDelete,
+  fetchCloudStudio,
+} from '@/lib/cloud/project-sync';
 
 const STORAGE_KEY = () => userKey("lumen.studio.projects.v3");
 const V2_KEY = () => userKey("lumen.studio.projects.v2");
@@ -100,6 +107,66 @@ function writeStore(store: StoreShape): void {
   cachedList = null;
   cachedFolders = null;
   listeners.forEach((cb) => cb());
+}
+
+// ─────────────────────── Cloud write-through ────────────────────────────
+// Fire-and-forget mirror to /api/studio/sync. Gated on `hydrated` so an
+// empty/stale local store can't push over server rows before the first pull
+// completes (the server also guards with an updated_at check). Mirrors the
+// Library write-through in lib/library/assets.ts.
+
+let hydrated = false;
+
+function pushProject(p: Project): void {
+  if (typeof window !== "undefined" && hydrated) void syncProjectUpsert(p);
+}
+function pushProjectDelete(id: string): void {
+  if (typeof window !== "undefined" && hydrated) void syncProjectDelete(id);
+}
+function pushFolder(f: Folder): void {
+  if (typeof window !== "undefined" && hydrated) void syncFolderUpsert(f);
+}
+function pushFolderDelete(id: string): void {
+  if (typeof window !== "undefined" && hydrated) void syncFolderDelete(id);
+}
+
+/**
+ * Pull the user's Studio store from the server and merge it into the local
+ * store (newest-updatedAt wins for projects; additive for folders). Called
+ * once the Clerk user resolves (see components/StorageUserInit.tsx) so a
+ * fresh device restores all canvas work. After the first pull, enables cloud
+ * write-through and backs up any local-only / locally-newer records.
+ */
+export async function hydrateFromCloud(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const remote = await fetchCloudStudio();
+
+  if (remote) {
+    const store = readStore();
+    for (const rp of remote.projects) {
+      const local = store.projects[rp.id];
+      if (!local || rp.updatedAt >= local.updatedAt) store.projects[rp.id] = rp;
+    }
+    for (const rf of remote.folders) {
+      if (!store.folders[rf.id]) store.folders[rf.id] = rf;
+    }
+    writeStore(store);
+  }
+
+  hydrated = true;
+
+  // Back up records the server is missing or that are newer locally. Safe even
+  // if the pull failed (remote === null): the server's updated_at guard rejects
+  // any push older than what it already holds.
+  const store = readStore();
+  for (const p of Object.values(store.projects)) {
+    const r = remote?.projects.find((x) => x.id === p.id);
+    if (!r || p.updatedAt > r.updatedAt) void syncProjectUpsert(p);
+  }
+  const remoteFolderIds = new Set(remote?.folders.map((f) => f.id));
+  for (const f of Object.values(store.folders)) {
+    if (!remoteFolderIds.has(f.id)) void syncFolderUpsert(f);
+  }
 }
 
 // ─────────────────────── Subscription / cache ───────────────────────────
@@ -234,6 +301,7 @@ export function createProject(opts: {
   };
   store.projects[id] = project;
   writeStore(store);
+  pushProject(project);
   return project;
 }
 
@@ -252,6 +320,7 @@ export function updateProject(
   };
   store.projects[id] = next;
   writeStore(store);
+  pushProject(next);
   return next;
 }
 
@@ -260,6 +329,7 @@ export function deleteProject(id: string): void {
   if (!store.projects[id]) return;
   delete store.projects[id];
   writeStore(store);
+  pushProjectDelete(id);
 }
 
 export function duplicateProject(id: string): Project | null {
@@ -280,12 +350,14 @@ export function moveProjectToFolder(
   const store = readStore();
   const project = store.projects[projectId];
   if (!project) return;
-  store.projects[projectId] = {
+  const moved: Project = {
     ...project,
     folderId: folderId ?? undefined,
     updatedAt: Date.now(),
   };
+  store.projects[projectId] = moved;
   writeStore(store);
+  pushProject(moved);
 }
 
 // ─────────────────────────── Folder API ────────────────────────────────
@@ -304,6 +376,7 @@ export function createFolder(name: string): Folder {
   };
   store.folders[folder.id] = folder;
   writeStore(store);
+  pushFolder(folder);
   return folder;
 }
 
@@ -311,8 +384,10 @@ export function renameFolder(id: string, name: string): void {
   const store = readStore();
   const folder = store.folders[id];
   if (!folder) return;
-  store.folders[id] = { ...folder, name: name.trim() || folder.name };
+  const next: Folder = { ...folder, name: name.trim() || folder.name };
+  store.folders[id] = next;
   writeStore(store);
+  pushFolder(next);
 }
 
 export function deleteFolder(id: string): void {
@@ -320,12 +395,17 @@ export function deleteFolder(id: string): void {
   if (!store.folders[id]) return;
   delete store.folders[id];
   // Unassign all projects that belonged to this folder.
+  const unfiled: Project[] = [];
   for (const project of Object.values(store.projects)) {
     if (project.folderId === id) {
-      store.projects[project.id] = { ...project, folderId: undefined };
+      const next = { ...project, folderId: undefined, updatedAt: Date.now() };
+      store.projects[project.id] = next;
+      unfiled.push(next);
     }
   }
   writeStore(store);
+  pushFolderDelete(id);
+  for (const p of unfiled) pushProject(p);
 }
 
 // ─────────────────────────── Helpers ───────────────────────────────────
