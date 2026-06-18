@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Settings } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/ui/wordmark";
@@ -84,7 +85,22 @@ export function SiteHeader() {
             </Link>
           )}
           {status === "signed-in" && (
-            <UserButton />
+            <>
+              <Link
+                href="/settings"
+                aria-label="Settings"
+                title="API keys & settings"
+                className={cn(
+                  "inline-flex items-center justify-center rounded-full border p-1.5 transition-colors",
+                  pathname.startsWith("/settings")
+                    ? "border-ink-dim text-ink"
+                    : "border-border text-ink-dim hover:border-ink-dim hover:text-ink",
+                )}
+              >
+                <Settings className="size-4" />
+              </Link>
+              <UserButton />
+            </>
           )}
           <Button size="sm" variant="default" className="hidden sm:inline-flex">
             <span className="font-mono text-[10px] tracking-[0.12em]">⌘K</span>
