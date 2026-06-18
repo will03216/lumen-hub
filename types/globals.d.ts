@@ -8,6 +8,10 @@ declare global {
    * `onboarded` is set true once a user has saved all required BYOK keys.
    */
   interface CustomJwtSessionClaims {
+    /** Primary email — add to the Clerk session token as:
+     *  { "email": "{{user.primary_email_address}}" }
+     *  Used by proxy.ts to enforce the access allowlist. */
+    email?: string
     metadata?: {
       onboarded?: boolean
     }
