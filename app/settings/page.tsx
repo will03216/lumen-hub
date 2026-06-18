@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useAuth } from '@clerk/nextjs'
 import Link from 'next/link'
 
 const FIELD_TO_PROVIDER = {
@@ -13,6 +14,15 @@ const FIELD_TO_PROVIDER = {
 
 type FieldId = keyof typeof FIELD_TO_PROVIDER
 type Provider = (typeof FIELD_TO_PROVIDER)[FieldId]
+
+// Keys a user must have saved before the app unlocks (matches the server's
+// REQUIRED_PROVIDERS in /api/user/keys and the proxy onboarding gate).
+const REQUIRED_PROVIDERS: Provider[] = [
+  'byteplus',
+  'byteplus_ak',
+  'byteplus_sk',
+  'byteplus_tos_bucket',
+]
 
 const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[] = [
   {
@@ -55,6 +65,7 @@ export default function SettingsPage() {
 
 function SettingsForm() {
   const router = useRouter()
+  const { getToken } = useAuth()
   const searchParams = useSearchParams()
   const isSetup = searchParams.get('setup') === '1'
 
@@ -74,18 +85,32 @@ function SettingsForm() {
     setTimeout(() => setToast(null), 3500)
   }
 
-  const loadHints = useCallback(async () => {
+  const loadHints = useCallback(async (): Promise<Hints> => {
     try {
       const res = await fetch('/api/user/keys')
-      if (!res.ok) return
+      if (!res.ok) return {}
       const { keys } = (await res.json()) as { keys: Hints }
       setHints(keys)
+      return keys
     } catch {
       // non-critical
+      return {}
     }
   }, [])
 
   useEffect(() => { loadHints() }, [loadHints])
+
+  /**
+   * Enter the app after onboarding. The `onboarded` flag was just written to
+   * Clerk publicMetadata server-side, but the browser's session token still
+   * carries the old claim — so a plain navigation gets bounced back here by
+   * the proxy. Force a fresh token (skipCache) so it picks up onboarded:true,
+   * then do a full navigation so the gate sees the updated cookie.
+   */
+  async function enterApp() {
+    try { await getToken({ skipCache: true }) } catch { /* best-effort */ }
+    window.location.assign('/')
+  }
 
   async function handleSave() {
     const payload: Partial<Record<Provider, string>> = {}
@@ -93,7 +118,13 @@ function SettingsForm() {
       const val = values[field.id].trim()
       if (val) payload[FIELD_TO_PROVIDER[field.id]] = val
     }
+
+    const allRequiredSaved = (h: Hints) => REQUIRED_PROVIDERS.every((p) => Boolean(h[p]))
+
     if (Object.keys(payload).length === 0) {
+      // Nothing new typed. During setup, if everything required is already
+      // stored, treat the button as "enter the app" instead of erroring.
+      if (isSetup && allRequiredSaved(hints)) { await enterApp(); return }
       showToast('error', 'Enter at least one key to save.')
       return
     }
@@ -111,8 +142,13 @@ function SettingsForm() {
         return
       }
       setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '' })
-      await loadHints()
-      if (isSetup) { router.push('/'); return }
+      const fresh = await loadHints()
+      if (isSetup) {
+        if (allRequiredSaved(fresh)) { await enterApp(); return }
+        const missing = REQUIRED_PROVIDERS.filter((p) => !fresh[p]).length
+        showToast('success', `Saved. Add the ${missing} remaining required key${missing > 1 ? 's' : ''} to continue.`)
+        return
+      }
       showToast('success', 'Keys saved.')
     } catch {
       showToast('error', 'Network error — please try again.')
