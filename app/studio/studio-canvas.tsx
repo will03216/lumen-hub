@@ -31,6 +31,7 @@ import { VideoGenNode } from "./nodes/video-gen-node";
 import { PreviewNode } from "./nodes/preview-node";
 import { WebExtractNode } from "./nodes/web-extract-node";
 import { PromptComposerNode } from "./nodes/prompt-composer-node";
+import { PromptOptimizerNode } from "./nodes/prompt-optimizer-node";
 import { LongVideoNode } from "./nodes/long-video-node";
 import { ArticleIngesterNode } from "./nodes/article-ingester-node";
 import { ArticleNarrationNode } from "./nodes/article-narration-node";
@@ -57,6 +58,7 @@ const nodeTypes: NodeTypes = {
   preview: PreviewNode,
   webExtract: WebExtractNode,
   promptComposer: PromptComposerNode,
+  promptOptimizer: PromptOptimizerNode,
   longVideo: LongVideoNode,
   articleIngester: ArticleIngesterNode,
   articleNarration: ArticleNarrationNode,

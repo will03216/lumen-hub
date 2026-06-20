@@ -33,6 +33,7 @@ export const NODE_TYPE_IDS = [
   "preview",
   "webExtract",
   "promptComposer",
+  "promptOptimizer",
   "longVideo",
   "articleIngester",
   "articleNarration",

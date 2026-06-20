@@ -42,3 +42,6 @@ public/library-cache/
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# deploy config (CR creds, build vars)
+deploy/.env.deploy

@@ -20,6 +20,13 @@ const nextConfig: NextConfig = {
   // ENOENT. Marking both packages as external keeps them as plain
   // require() calls so Node resolves them from node_modules at runtime.
   serverExternalPackages: ["fluent-ffmpeg", "ffmpeg-static"],
+  // These routes read the bundled Seedance skill's reference docs from disk at
+  // runtime. Standalone output traces only statically-imported files, so
+  // force-include the markdown into the build.
+  outputFileTracingIncludes: {
+    "/api/optimize-prompt": ["./claude_skill/references/**/*.md"],
+    "/api/article-to-prompt": ["./claude_skill/references/**/*.md"],
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },

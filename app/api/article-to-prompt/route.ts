@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { logRouteError } from "@/lib/server-log";
+import { buildGroundedSystem } from "@/lib/server/seedance-skill";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { assertSafeUrl } from "@/lib/server/url-guard";
@@ -8,12 +9,19 @@ import { assertSafeUrl } from "@/lib/server/url-guard";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/** Thinking budget — lets the model run the skill's pipeline + integrity check
+ *  before emitting the shot JSON. max_tokens must exceed this. */
+const THINKING_BUDGET = 4000;
+const MAX_TOKENS = 8000;
+
 type IngestBody = {
   articleText?: string;
   articleUrl?: string;
   claudeModel?: string;
   claudeApiKey?: string;
   systemPrompt?: string;
+  /** When true, ground shot generation in the bundled Seedance skill's docs. */
+  useSkillDocs?: boolean;
   shotCount?: number;
   shotDuration?: number;
   outputLanguage?: string;
@@ -52,8 +60,10 @@ function buildUserMessage(
     `Each sentence must describe what the chef is actively doing in that shot (not quote the article or make general comments about the dish). ` +
     `Natural spoken delivery, present tense.\n\n` +
     `${langInstruction}\n\n` +
+    `If Seedance reference documents are provided above, apply their full optimization pipeline (6-component scaffold, anti-slop pass, prose-craft, named lighting, present tense) to every shot, and compute pacing with the duration-calculus rules.\n\n` +
     `Respond with valid JSON only, no markdown fences:\n` +
-    `{"shots":["<prompt 1>","<prompt 2>",...],"anchorScript":"<narration>"}`
+    `{"shots":["<prompt 1>","<prompt 2>",...],"anchorScript":"<narration>"}\n` +
+    `The JSON is only a transport envelope. Each "<prompt N>" value must be plain Seedance prose — the skill's "no JSON / no bullet lists inside the prompt" rule applies to the prompt text itself, not to this envelope.`
   );
 }
 
@@ -101,17 +111,31 @@ export async function POST(req: NextRequest) {
     const shotDuration = typeof body.shotDuration === "number" ? Math.max(1, body.shotDuration) : 10;
     const client = new Anthropic({ apiKey: body.claudeApiKey.trim() });
 
+    // Ground shot generation in the skill's reference docs when requested.
+    // The article text drives conditional doc selection (genre, character, …).
+    let system: string | Anthropic.TextBlockParam[] = body.systemPrompt.trim();
+    let selectedDocs: string[] = [];
+    if (body.useSkillDocs) {
+      ({ system, selectedDocs } = await buildGroundedSystem(body.systemPrompt.trim(), {
+        brief: content,
+        shotCount,
+      }));
+    }
+
     const message = await client.messages.create({
       model,
-      max_tokens: 2048,
-      system: body.systemPrompt.trim(),
+      max_tokens: MAX_TOKENS,
+      thinking: { type: "enabled", budget_tokens: THINKING_BUDGET },
+      system,
       messages: [
         { role: "user", content: buildUserMessage(content, shotCount, shotDuration, body.outputLanguage, body.customOutputLanguage) },
       ],
     });
 
-    const block = message.content[0];
-    const raw = block.type === "text" ? block.text.trim() : "";
+    // With thinking enabled the response leads with thinking blocks — take the
+    // first text block, not content[0].
+    const textBlock = message.content.find((b) => b.type === "text");
+    const raw = textBlock && textBlock.type === "text" ? textBlock.text.trim() : "";
     if (!raw) {
       return NextResponse.json({ error: "Claude returned an empty response." }, { status: 500 });
     }
@@ -144,10 +168,13 @@ export async function POST(req: NextRequest) {
               model,
               shotCount,
               shotDuration,
+              useSkillDocs: !!body.useSkillDocs,
+              selectedDocs,
               systemPrompt: body.systemPrompt,
               articleUrl: body.articleUrl ?? null,
               articleTextLength: content.length,
             },
+            usage: message.usage,
             rawResponse: raw,
             parsed: { shots, anchorScript },
             output: { prompt, narration: anchorScript },
