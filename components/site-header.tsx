@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { label: "Index", href: "/", match: (p: string) => p === "/" },
   { label: "Generator", href: "/generate", match: (p: string) => p.startsWith("/generate") },
+  { label: "Forge", href: "/forge", match: (p: string) => p.startsWith("/forge") },
   { label: "Story", href: "/story", match: (p: string) => p.startsWith("/story") },
   { label: "Canvas", href: "/studio", match: (p: string) => p.startsWith("/studio") },
   { label: "Library", href: "/library", match: (p: string) => p.startsWith("/library") },

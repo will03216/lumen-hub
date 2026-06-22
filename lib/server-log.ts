@@ -31,7 +31,11 @@ export type RouteTag =
   | "compose-prompt"
   | "video.stitch"
   | "article-to-prompt"
-  | "optimize-prompt";
+  | "optimize-prompt"
+  | "forge/plan"
+  | "forge/critic"
+  | "forge/revise"
+  | "forge/trace";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,
  *  but we fall back to `console.error` with a space-separated fallback

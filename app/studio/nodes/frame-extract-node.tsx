@@ -25,7 +25,7 @@
 
 import { memo, useCallback } from "react";
 import { useReactFlow, type NodeProps } from "@xyflow/react";
-import { mediaProxyUrl } from "@/lib/compare/media-proxy";
+import { captureFrame } from "@/lib/studio/video-frame";
 import { NodeShell } from "./node-shell";
 import type { NodeTypeSpec, StudioNodeData } from "../types";
 
@@ -118,85 +118,6 @@ function Field({
       {children}
     </label>
   );
-}
-
-// ─────────────────────────── Frame extraction ────────────────────────
-
-/** Capture one frame at the requested time from `videoUrl`. Returns a
- *  JPEG data URI sized to the video's native (videoWidth × videoHeight).
- *
- *  Routes through `mediaProxyUrl` so BytePlus CDN videos load
- *  same-origin — that's the same trick the Compare and Library views
- *  use. Without it the canvas is tainted and `toDataURL` throws a
- *  SecurityError. */
-async function captureFrame(
-  videoUrl: string,
-  atSec: number,
-  signal: AbortSignal,
-): Promise<string> {
-  const proxiedUrl = mediaProxyUrl(videoUrl);
-  const video = document.createElement("video");
-  video.crossOrigin = "anonymous";
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.src = proxiedUrl;
-
-  // loadedmetadata fires when duration + dimensions are known.
-  await waitForEvent(video, "loadedmetadata", signal);
-  if (signal.aborted) throw new DOMException("aborted", "AbortError");
-
-  const targetTime = Math.min(
-    Math.max(0, atSec),
-    Math.max(0, video.duration - 0.05),
-  );
-  // Seek then wait for `seeked` so the rendered frame matches the time.
-  video.currentTime = targetTime;
-  await waitForEvent(video, "seeked", signal);
-  if (signal.aborted) throw new DOMException("aborted", "AbortError");
-
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("canvas 2D unavailable");
-  ctx.drawImage(video, 0, 0);
-
-  // JPEG @ 0.9 keeps even a 1080p capture under BytePlus's 10MB image
-  // ceiling. PNG would balloon past it.
-  return canvas.toDataURL("image/jpeg", 0.9);
-}
-
-/** Promise wrapper around a one-shot DOM event with abort support.
- *  Rejects on the matching `error` event so a broken URL doesn't hang
- *  the whole graph run. */
-function waitForEvent(
-  el: HTMLMediaElement,
-  type: string,
-  signal: AbortSignal,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      el.removeEventListener(type, onEvent);
-      el.removeEventListener("error", onError);
-      signal.removeEventListener("abort", onAbort);
-    };
-    const onEvent = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error(`video ${type} failed: load error`));
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("aborted", "AbortError"));
-    };
-    el.addEventListener(type, onEvent, { once: true });
-    el.addEventListener("error", onError, { once: true });
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 // ─────────────────────────── Spec ────────────────────────────────────

@@ -221,6 +221,154 @@ export async function captionImage(p: CaptionParams, apiKey?: string): Promise<C
   return { caption };
 }
 
+// ---------- VLM critic (Forge QA) ----------
+//
+// Seed 2.0 Pro is a capable vision-language model on the same /chat/completions
+// host, so the Forge critic reuses the BytePlus key already in Settings — no
+// separate Claude BYOK. It scores one generated asset against the shot's
+// intended prompt + a QA rubric and returns structured JSON (score + per-check
+// verdicts + a localized fix hint) that drives targeted regeneration.
+//
+// Model-agnostic on video: it first tries native `video_url` (Seed analyses the
+// real clip — motion, pacing, hook timing); if the account/model rejects video
+// input it falls back to scoring sampled frames. Image specs score the still
+// directly.
+
+const CRITIC_MODEL =
+  process.env.BYTEPLUS_CRITIC_MODEL ??
+  process.env.BYTEPLUS_PROMPT_MODEL ??
+  "seed-2-0-pro-260328";
+
+export type ScoreCheck = { check: string; pass: boolean; reason: string };
+export type ScoreResult = {
+  score: number;
+  checks: ScoreCheck[];
+  fixHint: string;
+  /** How the asset was actually scored: native video, sampled frames, or a still. */
+  mode: "video" | "frames" | "image";
+};
+
+export type ScoreAssetParams = {
+  kind: "image" | "video";
+  /** The compiled prompt the asset was supposed to realize. */
+  prompt: string;
+  /** Rubric checks to score, e.g. ["brand_color_present","hook_in_first_2s"]. */
+  checks: string[];
+  /** Image specs: a public https URL or data: URL of the asset. */
+  imageUrl?: string;
+  /** Video specs: public https URL of the clip (native-video attempt). */
+  videoUrl?: string;
+  /** Video specs: sampled frames as data: URLs (first/mid/last) — the fallback. */
+  frames?: string[];
+};
+
+type VisionContentItem =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "video_url"; video_url: { url: string } };
+
+function buildCriticInstruction(prompt: string, checks: string[]): string {
+  return [
+    "You are the QA / Consistency Critic in a guarded video/image production pipeline.",
+    "Score the attached asset against the INTENDED PROMPT and each REQUIRED CHECK.",
+    "Be a strict, calibrated judge: reward on-brief, on-brand, consistent results; penalize drift, artifacts, missing brand elements, and off-spec composition. Name the region/element in each reason, not a vague verdict.",
+    "",
+    "INTENDED PROMPT:",
+    `"""`,
+    prompt.trim(),
+    `"""`,
+    "",
+    "REQUIRED CHECKS:",
+    ...checks.map((c) => `- ${c}`),
+    "",
+    "Return ONLY JSON, no prose, no fences:",
+    `{ "score": <0..1 float>, "checks": [ { "check": "<id>", "pass": <bool>, "reason": "<localized>" } ], "fix_hint": "<one line: the single most important change for the next regeneration>" }`,
+  ].join("\n");
+}
+
+function extractCriticJson(raw: string): { score?: number; checks?: Array<{ check?: string; pass?: boolean; reason?: string }>; fix_hint?: string } {
+  const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new BytePlusError(502, "Bad Gateway", "critic returned no JSON");
+  }
+  return JSON.parse(stripped.slice(start, end + 1));
+}
+
+async function callCritic(content: VisionContentItem[], key?: string): Promise<string> {
+  const out = await request<{ choices?: Array<{ message?: { content?: string } }> }>(
+    "/chat/completions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: resolveModel(CRITIC_MODEL),
+        messages: [{ role: "user", content }],
+        max_tokens: 1500,
+      }),
+    },
+    key,
+  );
+  const text = out.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new BytePlusError(502, "Bad Gateway", "no critic content in response");
+  return text;
+}
+
+function normalizeScore(parsed: ReturnType<typeof extractCriticJson>, mode: ScoreResult["mode"]): ScoreResult {
+  const score = Math.max(0, Math.min(1, typeof parsed.score === "number" ? parsed.score : 0));
+  const checks: ScoreCheck[] = (parsed.checks ?? []).map((c) => ({
+    check: String(c.check ?? "unknown"),
+    pass: !!c.pass,
+    reason: String(c.reason ?? ""),
+  }));
+  const fixHint = String(parsed.fix_hint ?? "").trim();
+  return { score, checks, fixHint, mode };
+}
+
+/**
+ * Score one asset with the Seed 2.0 Pro VLM. For video, attempt native
+ * `video_url` first; on rejection, fall back to sampled frames.
+ */
+export async function scoreAsset(p: ScoreAssetParams, key?: string): Promise<ScoreResult> {
+  const instruction = buildCriticInstruction(p.prompt, p.checks);
+
+  if (p.kind === "image") {
+    const url = p.imageUrl;
+    if (!url) throw new BytePlusError(400, "Bad Request", "imageUrl required for image scoring");
+    const text = await callCritic(
+      [{ type: "text", text: instruction }, { type: "image_url", image_url: { url } }],
+      key,
+    );
+    return normalizeScore(extractCriticJson(text), "image");
+  }
+
+  // Video: try native video understanding first.
+  if (p.videoUrl) {
+    try {
+      const text = await callCritic(
+        [{ type: "text", text: instruction }, { type: "video_url", video_url: { url: p.videoUrl } }],
+        key,
+      );
+      return normalizeScore(extractCriticJson(text), "video");
+    } catch (err) {
+      // Model/account doesn't accept video input (4xx) → fall through to frames.
+      // Re-throw genuine auth/rate errors so the route can classify them.
+      if (err instanceof BytePlusError && (err.status === 401 || err.status === 429)) throw err;
+    }
+  }
+
+  const frames = (p.frames ?? []).filter(Boolean);
+  if (frames.length === 0) {
+    throw new BytePlusError(400, "Bad Request", "no video_url accepted and no frames supplied");
+  }
+  const content: VisionContentItem[] = [
+    { type: "text", text: instruction + "\n\nThe asset is a video; you are given sampled frames in order (start → end). Judge temporal checks (e.g. hook timing) from the frame progression." },
+    ...frames.map((url): VisionContentItem => ({ type: "image_url", image_url: { url } })),
+  ];
+  const text = await callCritic(content, key);
+  return normalizeScore(extractCriticJson(text), "frames");
+}
+
 // ---------- Story prompt generation ----------
 //
 // Uses the same /chat/completions endpoint as caption but with a
