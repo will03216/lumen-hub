@@ -13,6 +13,7 @@
 
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 import type { NextRequest } from "next/server";
 import {
   uploadToTos,
@@ -20,7 +21,9 @@ import {
   getAsset,
   listAllAssetGroups,
   createAssetGroup,
+  type Credentials,
 } from "@/lib/modelark";
+import { getUserKeys, missingKeyResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,15 +32,18 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAX_BYTES = 50 * 1024 * 1024;
 const POLL_MAX = 30;
 
-let cachedGroupId: string | null = null;
+// Cache the "Web Extracts" group id per access key — under BYOK each user has
+// their own ModelArk account, so a group id is only valid for the AK that owns it.
+const cachedGroupIdByAk = new Map<string, string>();
 
-async function getOrCreateWebExtractsGroup(): Promise<string> {
-  if (cachedGroupId) return cachedGroupId;
-  const groups = await listAllAssetGroups();
+async function getOrCreateWebExtractsGroup(creds: Credentials): Promise<string> {
+  const cached = cachedGroupIdByAk.get(creds.ak);
+  if (cached) return cached;
+  const groups = await listAllAssetGroups(creds);
   const existing = groups.find((g) => g.name === "Web Extracts");
-  if (existing) { cachedGroupId = existing.groupId; return existing.groupId; }
-  const created = await createAssetGroup("Web Extracts", "Assets imported from web pages via the Web Extract canvas node");
-  cachedGroupId = created.groupId;
+  if (existing) { cachedGroupIdByAk.set(creds.ak, existing.groupId); return existing.groupId; }
+  const created = await createAssetGroup("Web Extracts", "Assets imported from web pages via the Web Extract canvas node", creds);
+  cachedGroupIdByAk.set(creds.ak, created.groupId);
   return created.groupId;
 }
 
@@ -70,8 +76,9 @@ function downloadViaNodeHttp(
         if (status >= 300 && status < 400 && res.headers.location) {
           res.resume();
           if (redirectsLeft <= 0) { reject(new Error("Too many redirects")); return; }
-          const next = new URL(res.headers.location, url).toString();
-          downloadViaNodeHttp(next, headers, redirectsLeft - 1).then(resolve).catch(reject);
+          const nextUrl = new URL(res.headers.location, url);
+          try { assertSafeUrl(nextUrl); } catch (e) { reject(e); return; }
+          downloadViaNodeHttp(nextUrl.toString(), headers, redirectsLeft - 1).then(resolve).catch(reject);
           return;
         }
 
@@ -121,6 +128,12 @@ export async function POST(req: NextRequest) {
 
   if (!url) return Response.json({ error: "url is required" }, { status: 400 });
 
+  const { byteplusAk: ak, bytelusSk: sk, byteplusTosBucket: bucket } = await getUserKeys();
+  if (!ak) return missingKeyResponse("byteplus_ak");
+  if (!sk) return missingKeyResponse("byteplus_sk");
+  if (!bucket) return missingKeyResponse("byteplus_tos_bucket");
+  const creds: Credentials = { ak, sk, bucket };
+
   let parsed: URL;
   try { parsed = new URL(url); } catch {
     return Response.json({ error: "invalid url" }, { status: 400 });
@@ -128,6 +141,7 @@ export async function POST(req: NextRequest) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return Response.json({ error: "http/https only" }, { status: 400 });
   }
+  try { assertSafeUrl(parsed); } catch { return Response.json({ error: "blocked" }, { status: 403 }); }
 
   // ── 1. Download ────────────────────────────────────────────────────────────
   const downloadHeaders: Record<string, string> = {
@@ -160,7 +174,7 @@ export async function POST(req: NextRequest) {
   let tosUrl: string;
   try {
     console.log("[upload-media] uploading to TOS, filename:", filename);
-    tosUrl = await uploadToTos(fileBuffer, contentType, filename);
+    tosUrl = await uploadToTos(fileBuffer, contentType, filename, creds);
     console.log("[upload-media] TOS url:", tosUrl);
   } catch (err) {
     console.error("[upload-media] TOS upload error:", err);
@@ -172,7 +186,7 @@ export async function POST(req: NextRequest) {
   let groupId: string;
   try {
     console.log("[upload-media] getting web-extracts group");
-    groupId = await getOrCreateWebExtractsGroup();
+    groupId = await getOrCreateWebExtractsGroup(creds);
     console.log("[upload-media] groupId:", groupId);
   } catch (err) {
     console.error("[upload-media] group error:", err);
@@ -184,7 +198,7 @@ export async function POST(req: NextRequest) {
   let assetId: string;
   try {
     console.log("[upload-media] registering asset");
-    assetId = await createAsset(groupId, tosUrl, kind === "video" ? "Video" : "Image");
+    assetId = await createAsset(groupId, tosUrl, kind === "video" ? "Video" : "Image", creds);
     console.log("[upload-media] assetId:", assetId);
   } catch (err) {
     console.error("[upload-media] createAsset error:", err);
@@ -196,7 +210,7 @@ export async function POST(req: NextRequest) {
   try {
     for (let i = 0; i < POLL_MAX; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      const info = await getAsset(assetId);
+      const info = await getAsset(assetId, creds);
       if (info.status === "Active") break;
       if (info.status === "Failed") {
         return Response.json({ error: `BytePlus asset failed: ${info.errorMessage ?? "unknown"}` }, { status: 500 });

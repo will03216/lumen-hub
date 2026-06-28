@@ -5,7 +5,7 @@ Lumen Hub is a local-first creative workstation built on Next.js 16. It combines
 - marketing and discovery surfaces (`/`, `/showcase`, `/reels`)
 - creation surfaces (`/generate`, `/compare`, `/studio`)
 - asset management (`/library`)
-- optional cloud identity and sync (Supabase)
+- Clerk-backed identity with per-user encrypted API key storage
 - server-side adapters to multiple AI providers (BytePlus, fal.ai, MiniMax)
 
 At a high level, the system is designed so that the UI works on a fresh clone with only local browser storage, while external APIs and cloud sync progressively add capability.
@@ -16,7 +16,7 @@ At a high level, the system is designed so that the UI works on a fresh clone wi
 Browser UI
   |- Landing / Showcase / Reels
   |- Generate / Compare / Studio / Library
-  |- localStorage stores
+  |- localStorage stores (scoped per Clerk user ID)
   |- useSyncExternalStore snapshots
   v
 Next.js App Router
@@ -24,30 +24,34 @@ Next.js App Router
   |- Client shells for interactive tools
   |- API routes under /app/api/*
   v
+Auth & Key Resolution
+  |- Clerk  -> identity, session, onboarding gate
+  |- /api/user/keys -> per-user encrypted API keys (CRUD)
+  |- lib/server/user-keys.ts -> key resolution per request
+  v
 Service Adapters
   |- BytePlus  -> images, video, captioning
   |- fal.ai    -> GPT Image 2
   |- MiniMax   -> video + TTS
-  |- Supabase  -> auth + optional cloud mirror
   v
 Persistence
-  |- Browser localStorage
+  |- Browser localStorage (user-scoped keys)
   |- public/library-cache/ mirrored media on disk
-  |- Supabase Postgres tables (optional)
+  |- PostgreSQL (user_api_keys, assets, studio_projects)
 ```
 
 ## 2. Architectural Principles
 
 ### Local-first by default
 
-The app works without Supabase or any cloud database configuration. The main persisted state lives in browser `localStorage`:
+The app works without a database or any cloud database configuration. The main persisted state lives in browser `localStorage`:
 
 - Library assets: `lib/library/assets.ts`
 - Studio projects: `lib/studio/projects.ts`
 - Compare saved pairs: `lib/compare/saved-pairs.ts`
 - transient render queues: module-level memory in `lib/library/in-flight.ts`
 
-This makes the app usable immediately in local development and on single-device installs.
+Since v2, all localStorage keys are scoped per Clerk user ID (`u_<userId>:<base>`) via `lib/storage-user.ts`. This prevents data leakage between accounts on shared devices.
 
 ### Thin route layer, richer adapters
 
@@ -58,6 +62,16 @@ The App Router API handlers mostly validate input, select the upstream provider,
 - `lib/minimax.ts`
 
 That separation keeps UI code provider-agnostic.
+
+### Per-user key resolution
+
+Each route handler that calls an upstream provider calls `getUserKeys()` from `lib/server/user-keys.ts` first. That function:
+
+1. reads the caller's Clerk user ID from the server session
+2. queries `user_api_keys` in Postgres and decrypts the stored keys
+3. returns an empty object if `DATABASE_URL` or `KEY_ENCRYPTION_SECRET` is absent (dev mode)
+
+Adapters fall back to their respective env-var credentials when no per-user key is found. This means the server env vars act as shared defaults, while per-user keys take precedence.
 
 ### Unified client contracts
 
@@ -75,7 +89,7 @@ Generated assets are saved immediately into the local Library, then upgraded asy
 
 1. save metadata to local store
 2. attempt local media mirroring to `/public/library-cache`
-3. if signed in, mirror metadata to Supabase
+3. if signed in and `DATABASE_URL` is set, mirror metadata to Postgres via `/api/library/sync`
 
 The render success path does not block on those upgrades.
 
@@ -97,7 +111,13 @@ These routes primarily explain or seed creation flows. They are mostly static or
 - `/studio`: project dashboard for node-graph workflows
 - `/studio/[id]`: graph editor and runner
 - `/library`: saved renders and references
-- `/sign-in`: optional auth and cloud-sync entry point
+
+### Auth and account surfaces
+
+- `/sign-in/[[...sign-in]]`: Clerk-hosted sign-in (catchall for OAuth callbacks)
+- `/sign-up/[[...sign-up]]`: Clerk-hosted sign-up
+- `/onboarding`: post-sign-in gate — checks for BytePlus keys, redirects to `/settings?setup=1` if missing
+- `/settings`: per-user API credential management (BytePlus API key, AK, SK)
 
 ### Service routes
 
@@ -107,7 +127,10 @@ These routes primarily explain or seed creation flows. They are mostly static or
 - `/api/audio`: text-to-speech generation
 - `/api/caption`: image-to-prompt captioning
 - `/api/library/mirror`: remote BytePlus asset -> local disk mirror
+- `/api/library/sync`: upsert/delete Library asset records in Postgres
 - `/api/media`: same-origin media proxy for BytePlus CDN assets
+- `/api/user/keys`: CRUD for per-user encrypted API keys
+- `/api/health`: liveness probe
 
 ## 4. Frontend Layer
 
@@ -122,7 +145,7 @@ The app uses the Next.js App Router with a mostly server-entered, client-shell a
   - `app/library/library-shell.tsx`
   - `app/studio/studio-canvas.tsx`
 
-`app/layout.tsx` mounts the `AuthProvider` globally so every client component can read auth state without prop drilling.
+`app/layout.tsx` mounts the `ClerkProvider` globally and renders `StorageUserInit` to scope localStorage keys as soon as Clerk resolves the session.
 
 ## 4.2 UI state model
 
@@ -138,7 +161,7 @@ The app intentionally avoids a single global state manager. Instead it uses smal
 
 ### Library store
 
-`lib/library/assets.ts` persists asset metadata in `localStorage` under `lumen.library.assets.v1`.
+`lib/library/assets.ts` persists asset metadata in `localStorage` under a user-scoped key derived from `lib/storage-user.ts`.
 
 Each asset can represent:
 
@@ -157,7 +180,7 @@ The record includes:
 
 ### Studio project store
 
-`lib/studio/projects.ts` persists project envelopes in `localStorage` under `lumen.studio.projects.v2`.
+`lib/studio/projects.ts` persists project envelopes in `localStorage` under a user-scoped key.
 
 Each project stores:
 
@@ -205,7 +228,7 @@ Flow:
 1. User fills the image generator form
 2. Client uses `lib/compare/use-image-render.ts`
 3. Hook `POST`s to `/api/image`
-4. `app/api/image/route.ts` inspects the selected model
+4. `app/api/image/route.ts` calls `getUserKeys()` to resolve credentials, then inspects the selected model
 5. Route dispatches to:
    - `lib/byteplus.ts` for Seedream-family models
    - `lib/fal.ts` for `openai/gpt-image-2`
@@ -213,13 +236,14 @@ Flow:
 7. The success path stages assets through `lib/library/auto-save.ts`
 8. `stageGeneratedImage()` writes to the Library store
 9. `lib/library/mirror.ts` optionally starts the mirror job
-10. if signed in, `lib/cloud/asset-sync.ts` upserts the asset metadata to Supabase
+10. if signed in and DB is configured, `lib/cloud/asset-sync.ts` upserts the asset metadata to Postgres
 
 Error behavior:
 
 - route handlers preserve upstream HTTP status where possible
 - client hooks classify failures through `lib/compare/error-class.ts`
 - short transient failures auto-retry once
+- missing API key returns `{ error: 'missing_api_key', settingsUrl: '/settings' }` with HTTP 402
 
 ## 5.3 Generate video workflow
 
@@ -227,10 +251,10 @@ Purpose: submit async video tasks and poll them to completion.
 
 Flow:
 
-1. User fills the video generator form
+1. User fills the video generator form (supports first-frame, last-frame, and reference-image modes)
 2. Client uses `lib/compare/use-video-render.ts`
 3. Hook `POST`s to `/api/video`
-4. `app/api/video/route.ts` dispatches by model provider:
+4. `app/api/video/route.ts` calls `getUserKeys()`, then dispatches by model provider:
    - BytePlus Seedance via `lib/byteplus.ts`
    - MiniMax via `lib/minimax.ts`
 5. Client receives a normalized task id
@@ -305,6 +329,7 @@ Flow:
 4. If the asset URL points to a BytePlus CDN host, `mirrorAsset()` calls `/api/library/mirror`
 5. The route streams the remote media to `public/library-cache/<id>.<ext>`
 6. Asset metadata is patched with `mirrorUrl` and `mirrorStatus`
+7. If signed in and DB is configured, `lib/cloud/asset-sync.ts` calls `/api/library/sync` to upsert the record to Postgres
 
 The library is the central handoff surface between Generator, Compare, and Studio.
 
@@ -333,25 +358,43 @@ Important behavior:
 - node outputs are cached per run hash to avoid repeated upstream calls
 - persisted project snapshots deliberately strip runtime execution artifacts
 
-## 5.9 Sign-in and cloud mode workflow
+### Studio node types
 
-Purpose: add optional account-backed sync without making the product cloud-dependent.
+Node types are registered in `app/studio/nodes/registry.ts`. Current built-in nodes:
+
+| Type | Description |
+|---|---|
+| `urlInput` | Paste one or more URLs (one per line); outputs `url` (first) and `urls` (all) |
+| `videoGen` | Video generation with support for first-frame, last-frame, and reference-image input modes |
+| image/audio/other | (see registry) |
+
+The `urlInput` node is useful for wiring existing hosted media into generation nodes without a local upload step.
+
+The `videoGen` node supports three optional image input modes: first frame only, last frame only, and a reference image. These correspond to BytePlus Seedance's `first_frame_image`, `last_frame_image`, and `reference_image` parameters.
+
+## 5.9 Sign-in, onboarding, and settings workflow
+
+Purpose: add Clerk-backed account identity, per-user API key storage, and an onboarding gate.
 
 Flow:
 
-1. `lib/cloud/supabase.ts` checks whether public Supabase env vars exist
-2. If absent, auth UI enters "disabled" mode and the app stays local-only
-3. If present, `AuthProvider` subscribes to Supabase auth state
-4. `/sign-in` offers magic link and Google OAuth
-5. After sign-in, asset mutations can mirror into Supabase
+1. `lib/cloud/auth.tsx` wraps Clerk's `useUser`/`useClerk` in a stable `{ status, user, signOut }` interface
+2. Clerk is configured with an after-sign-in redirect to `/onboarding`
+3. `/onboarding` is a server component that calls `getUserKeys()`:
+   - if the user already has a BytePlus key saved, it redirects to `/`
+   - otherwise it redirects to `/settings?setup=1`
+4. `/settings` shows the API credential form (BytePlus API key, Access Key, Secret Key)
+5. Saving calls `POST /api/user/keys`, which encrypts and upserts each key into `user_api_keys`
+6. On subsequent sign-ins the user is forwarded directly past onboarding
 
-Current implementation note:
+Per-user key resolution on API requests:
 
-- Library asset cloud sync is implemented in `lib/cloud/asset-sync.ts`
-- Supabase schema includes both `assets` and `studio_projects`
-- in the current code snapshot, Studio projects themselves still persist locally through `lib/studio/projects.ts`; a browser-side project sync bridge is not wired yet
+- Every generation route calls `getUserKeys()` from `lib/server/user-keys.ts`
+- That function queries Postgres, decrypts stored keys, and returns them
+- Adapters fall back to server env-var credentials when no per-user key exists
+- If a required key is missing entirely, the route returns HTTP 402 with `{ error: 'missing_api_key', settingsUrl: '/settings' }`
 
-That means the product copy and schema are already oriented toward cloud project sync, but the active code path is still local-first for Studio data.
+When `DATABASE_URL` or `KEY_ENCRYPTION_SECRET` are absent (local dev), `getUserKeys()` returns an empty object and the app falls back to env-var credentials silently.
 
 ## 6. Storage and Database Layer
 
@@ -366,6 +409,8 @@ The browser is the primary system of record for day-to-day interaction.
 - Compare saved pairs
 - legacy drafts compatibility
 
+All keys are namespaced per Clerk user ID via `lib/storage-user.ts` (`u_<userId>:<base>`). The `StorageUserInit` component in the root layout sets the active user ID as soon as Clerk resolves the session.
+
 Why localStorage:
 
 - no setup required
@@ -376,8 +421,6 @@ Tradeoff:
 
 - writes are synchronous and O(n) for serialized store updates
 - large-scale asset counts would eventually justify moving to IndexedDB
-
-The code already documents that migration path.
 
 ## 6.2 On-disk media mirror
 
@@ -401,42 +444,39 @@ Constraint:
 - this approach is suitable for local/dev and persistent disk deployments
 - on serverless production, `public/` is not a long-lived writable storage tier, so this would need to be swapped for object storage such as S3, R2, or Supabase Storage
 
-## 6.3 Supabase / Postgres
+## 6.3 PostgreSQL
 
-The Supabase schema lives in `supabase/schema.sql`.
+The database schema lives in `supabase/pg-schema.sql`. It targets plain PostgreSQL (no Supabase-specific extensions or RLS). `lib/db.ts` creates a singleton `pg.Pool` keyed to `DATABASE_URL`.
 
 Tables:
 
-- `assets`
-- `studio_projects`
+| Table | Purpose |
+|---|---|
+| `assets` | Cloud mirror of Library asset records |
+| `studio_projects` | Cloud mirror of Studio project envelopes |
+| `user_api_keys` | Per-user encrypted provider credentials |
 
 Design choices:
 
-- each row stores the full domain record in `payload jsonb`
-- RLS scopes all access to `auth.uid() = user_id`
+- `assets` and `studio_projects` store the full domain record in `payload jsonb`
+- `user_api_keys` stores AES-encrypted key ciphertext plus a 4-char hint for display
+- `user_id` is a Clerk user ID string (e.g. `user_2abc…`)
+- no Supabase RLS — access is enforced at the route handler layer via Clerk's `auth()`
 - `updated_at` indexes support recency queries per user
 
-Why JSONB payloads:
-
-- fewer schema migrations as app-side object shapes evolve
-- preserves local-first flexibility
-- treats Supabase as a mirror of app records rather than a heavily normalized relational core
-
-Current state:
-
-- `assets` is actively written via the cloud sync bridge
-- `studio_projects` is provisioned in schema but not yet actively mirrored by the browser code shown in this snapshot
+The database is optional. When `DATABASE_URL` is absent, all cloud sync routes return graceful errors and the app remains fully functional on local storage alone.
 
 ## 7. Service Layer
 
 ## 7.1 Route handlers as boundary layer
 
-The route handlers in `app/api/*` serve four jobs:
+The route handlers in `app/api/*` serve five jobs:
 
 1. validate and normalize incoming client payloads
-2. select the upstream provider from the chosen model
-3. preserve meaningful HTTP error semantics
-4. return provider-agnostic response shapes
+2. resolve per-user API credentials via `getUserKeys()`
+3. select the upstream provider from the chosen model
+4. preserve meaningful HTTP error semantics
+5. return provider-agnostic response shapes
 
 The routes are intentionally not the place where provider specifics accumulate.
 
@@ -447,7 +487,7 @@ The routes are intentionally not the place where provider specifics accumulate.
 `lib/byteplus.ts` handles:
 
 - image generation
-- video generation and polling
+- video generation and polling (including first/last frame and reference image parameters)
 - image captioning
 - model alias resolution via `BYTEPLUS_MODEL_ALIASES`
 
@@ -537,11 +577,21 @@ That means Studio is not just a visual wrapper around forms. It is a lightweight
 
 ## 11. Security and Trust Boundaries
 
-### API secrets
+### API secrets and per-user keys
 
-Provider API keys stay on the server and are only used in route handlers or server-side adapters.
+Provider API keys stay on the server and are only used in route handlers or server-side adapters. Per-user keys are stored AES-encrypted in Postgres and decrypted only inside `getUserKeys()` on the server. Plaintext credentials never leave the server tier; the client only receives 4-char hints.
 
-### Trusted remote media
+### SSRF protection
+
+`lib/server/url-guard.ts` exports `assertSafeUrl()`, which is called before any outbound fetch of a user-supplied URL. It blocks:
+
+- loopback addresses (`127.*`, `::1`)
+- RFC 1918 private ranges (`10.*`, `172.16-31.*`, `192.168.*`)
+- link-local and cloud metadata addresses (`169.254.*`, `metadata.google.internal`, etc.)
+- CGNAT range (`100.64-127.*`)
+- IPv4-mapped IPv6 equivalents
+
+### Trusted remote media hosts
 
 Two routes enforce host allowlists:
 
@@ -550,25 +600,38 @@ Two routes enforce host allowlists:
 
 Both only accept trusted BytePlus/Volcengine-style media hosts to avoid becoming open proxies or arbitrary downloaders.
 
-### Row-level security
+### Route-level auth enforcement
 
-Supabase tables use RLS keyed to the authenticated user id.
+All routes that touch Postgres call Clerk's `auth()` server-side and return 401 if no session exists. There is no shared table-level RLS; the route layer is the access boundary.
 
 ### Local-first privacy stance
 
-Without Supabase configuration, user data stays in browser storage and local disk cache only.
+Without a database configuration, user data stays in browser storage and local disk cache only.
 
-## 12. Known Gaps and Future Evolution
+## 12. Deployment
 
-The codebase already hints at several next steps:
+### Docker
 
-- Studio project cloud sync is provisioned in schema but not yet fully wired in the browser store layer
+`Dockerfile` builds a production Next.js image. `docker-compose.yml` composes the app with a Postgres container. `docker-compose.local.yml` is a local development variant.
+
+Required environment variables for a full-featured deployment:
+
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY`: Clerk credentials
+- `DATABASE_URL`: Postgres connection string
+- `KEY_ENCRYPTION_SECRET`: AES key for encrypting user API keys at rest
+- `BYTEPLUS_API_KEY` (optional fallback if users don't save their own key)
+
+The app degrades gracefully if any of these are absent — see §2 and §6.3.
+
+## 13. Known Gaps and Future Evolution
+
+- Studio project cloud sync is provisioned in schema and the library sync route pattern exists, but active browser-initiated project sync to Postgres is not yet wired
 - `public/library-cache` needs replacement with object storage for serverless production durability
 - localStorage-backed stores may eventually move to IndexedDB as volume grows
 - compare and generator surfaces continue to normalize more multi-provider capabilities
-- server-side Supabase clients for route handlers/server components are noted as a future step
+- the `user_api_keys` table currently covers BytePlus, fal, and MiniMax; adding new providers requires a new `provider` constant in the route and adapter
 
-## 13. Practical Mental Model
+## 14. Practical Mental Model
 
 If you need to understand the system quickly, the most useful mental model is:
 
@@ -577,7 +640,8 @@ If you need to understand the system quickly, the most useful mental model is:
 - `Compare` renders the same intent through multiple engines
 - `Library` is the shared durable catalog
 - `Studio` orchestrates multi-step pipelines on top of the same generation primitives
-- `API routes + adapters` isolate provider complexity
-- `localStorage + mirror cache + optional Supabase` provide layered persistence
+- `API routes + adapters` isolate provider complexity; every generation route resolves per-user keys first
+- `localStorage (user-scoped) + mirror cache + optional Postgres` provide layered persistence
+- `Clerk` handles identity; `/onboarding` + `/settings` handle first-run credential setup
 
-In other words, Lumen Hub is not just a prompt box. It is a local-first media workflow system with a unified asset catalog and pluggable provider backends.
+In other words, Lumen Hub is not just a prompt box. It is a local-first media workflow system with a unified asset catalog, pluggable provider backends, and per-user credential storage.

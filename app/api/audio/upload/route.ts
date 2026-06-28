@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToTos } from "@/lib/modelark";
+import { getUserKeys, missingKeyResponse, keyErrorResponse } from "@/lib/server/user-keys";
 import { logRouteError } from "@/lib/server-log";
 
 export const runtime = "nodejs";
@@ -32,12 +33,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { byteplusAk: ak, bytelusSk: sk, byteplusTosBucket: bucket } = await getUserKeys();
+    if (!ak) return missingKeyResponse("byteplus_ak");
+    if (!sk) return missingKeyResponse("byteplus_sk");
+    if (!bucket) return missingKeyResponse("byteplus_tos_bucket");
+
     const buffer = Buffer.from(await file.arrayBuffer());
     const filename = file.name || "music.mp3";
-    const url = await uploadToTos(buffer, contentType, filename);
+    const url = await uploadToTos(buffer, contentType, filename, { ak, sk, bucket });
 
     return NextResponse.json({ url });
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     logRouteError("audio.upload", err, startedAt);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

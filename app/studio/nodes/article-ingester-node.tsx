@@ -14,6 +14,8 @@ export type ArticleIngesterForm = {
   claudeModel: string;
   /** User's Claude API key — stored in form, sent server-side only. */
   claudeApiKey: string;
+  /** Ground shot generation in the bundled Seedance skill's reference docs. */
+  useSkillDocs: boolean;
   /** Selected system prompt preset key, or "custom". */
   systemPromptPreset: string;
   /** Free-form system prompt used when preset is "custom". */
@@ -193,6 +195,7 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
           claudeModel: d.form.claudeModel,
           claudeApiKey: d.form.claudeApiKey.trim(),
           systemPrompt,
+          useSkillDocs: d.form.useSkillDocs,
           shotCount: d.form.shotCount,
           shotDuration: d.form.shotDuration,
           outputLanguage: d.form.outputLanguage,
@@ -322,6 +325,23 @@ export const ArticleIngesterNode = memo(function ArticleIngesterNode({
             className="nodrag nowheel w-full resize-y rounded-[8px] border border-border bg-panel px-2 py-1.5 text-[11px] leading-[1.45] text-ink placeholder:text-ink-mute transition-colors focus:border-accent focus:outline-none"
           />
         )}
+
+        {/* Seedance-skill grounding toggle */}
+        <label className="nodrag flex cursor-pointer items-start gap-2 rounded-[8px] border border-border bg-panel px-2 py-1.5">
+          <input
+            type="checkbox"
+            checked={d.form.useSkillDocs}
+            onChange={(e) => update({ useSkillDocs: e.target.checked, generatedPrompt: "", narrationText: "" })}
+            className="mt-0.5 size-3 cursor-pointer accent-[var(--accent)]"
+          />
+          <span className="font-mono text-[9px] leading-[1.5] text-ink-dim">
+            <span className="uppercase tracking-[0.12em] text-ink">Ground in Seedance skill</span>
+            <span className="mt-0.5 block normal-case tracking-normal text-ink-mute">
+              Apply the bundled skill&apos;s 6-component, anti-slop, prose-craft &amp; duration
+              rules (+ extended thinking) so each shot is render-ready.
+            </span>
+          </span>
+        </label>
       </div>
 
       {/* ── Output language ───────────────────────────────────────── */}
@@ -528,6 +548,7 @@ export const articleIngesterSpec: NodeTypeSpec<ArticleIngesterForm> = {
     articleUrl: "",
     claudeModel: "claude-opus-4-7",
     claudeApiKey: "",
+    useSkillDocs: true,
     systemPromptPreset: "news",
     customSystemPrompt: "",
     outputLanguage: "match",
@@ -538,7 +559,7 @@ export const articleIngesterSpec: NodeTypeSpec<ArticleIngesterForm> = {
     narrationText: "",
   },
   hashInputs: (form, inputs) =>
-    `ai1:${form.claudeModel}|${form.systemPromptPreset}|${form.customSystemPrompt.slice(0, 60)}|${form.outputLanguage ?? "match"}|${(form.customOutputLanguage ?? "").slice(0, 40)}|${form.shotCount}|${form.shotDuration}|${form.generatedPrompt.slice(0, 80)}|${form.narrationText.slice(0, 80)}|${(inputs.text ?? form.articleText).slice(0, 120)}|${inputs.url ?? form.articleUrl}`,
+    `ai2:${form.claudeModel}|${form.useSkillDocs ? 1 : 0}|${form.systemPromptPreset}|${form.customSystemPrompt.slice(0, 60)}|${form.outputLanguage ?? "match"}|${(form.customOutputLanguage ?? "").slice(0, 40)}|${form.shotCount}|${form.shotDuration}|${form.generatedPrompt.slice(0, 80)}|${form.narrationText.slice(0, 80)}|${(inputs.text ?? form.articleText).slice(0, 120)}|${inputs.url ?? form.articleUrl}`,
   execute: async ({ form, inputs, signal, onProgress }) => {
     const articleText = ((inputs.text as string) ?? form.articleText).trim();
     const articleUrl = ((inputs.url as string) ?? form.articleUrl).trim();
@@ -571,6 +592,7 @@ export const articleIngesterSpec: NodeTypeSpec<ArticleIngesterForm> = {
         claudeModel: form.claudeModel,
         claudeApiKey: form.claudeApiKey.trim(),
         systemPrompt,
+        useSkillDocs: form.useSkillDocs,
         shotCount: form.shotCount,
         shotDuration: form.shotDuration,
         outputLanguage: form.outputLanguage,

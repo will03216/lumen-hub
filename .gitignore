@@ -18,6 +18,7 @@ next-env.d.ts
 .env
 .env.local
 .env.development.local
+.env.production
 .env.test.local
 .env.production.local
 
@@ -38,5 +39,9 @@ public/library-cache/
 
 # Misc
 .vercel
-.clerk/
-.env.production
+
+# clerk configuration (can include secrets)
+/.clerk/
+
+# deploy config (CR creds, build vars)
+deploy/.env.deploy

@@ -26,7 +26,9 @@ import {
 } from "./pairs";
 import { findImageModel, findVideoModel } from "@/lib/studio/models";
 
-const STORAGE_KEY = "lumen.compare.savedPairs";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.compare.savedPairs");
 
 export type SavedPair = {
   /** Deterministic from (a, b) so upsert dedupes on repeat save. */
@@ -46,7 +48,7 @@ export type SavedPair = {
 export function readSavedPairs(): SavedPair[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -74,7 +76,7 @@ export function readSavedPairs(): SavedPair[] {
 export function writeSavedPairs(pairs: SavedPair[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(pairs));
+    window.localStorage.setItem(STORAGE_KEY(), JSON.stringify(pairs));
   } catch {
     // ignore
   }
@@ -92,7 +94,7 @@ export function writeSavedPairs(pairs: SavedPair[]): void {
 export function subscribeSavedPairs(onChange: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   const handler = (e: StorageEvent) => {
-    if (e.key !== STORAGE_KEY) return;
+    if (e.key !== STORAGE_KEY()) return;
     onChange();
   };
   window.addEventListener("storage", handler);

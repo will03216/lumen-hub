@@ -1,0 +1,14 @@
+.git
+.gitignore
+.next
+.env*
+node_modules
+npm-debug.log*
+README.md
+ARCHITECTURE.md
+AGENTS.md
+CLAUDE.md
+design/
+debug/
+docker-compose.yml
+.dockerignore

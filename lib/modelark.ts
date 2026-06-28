@@ -19,14 +19,19 @@
 
 import { createHash, createHmac } from "crypto";
 import { randomUUID } from "crypto";
+import { MissingKeyError } from "@/lib/server/missing-key";
 
 // ─────────────────────────── Config ──────────────────────────────────────
+// Strict BYOK: AK/SK and the TOS bucket are per-user credentials (no env
+// fallback). Host/region/service/version remain shared infra config (env).
 
-function cfg(key: string): string {
-  const v = process.env[key];
-  if (!v) throw new Error(`Missing env var ${key} — add it to .env.local`);
-  return v;
+/** Require a per-user credential; throw a typed 402-mappable error if absent. */
+function required(provider: string, value?: string): string {
+  if (!value) throw new MissingKeyError(provider);
+  return value;
 }
+
+export type Credentials = { ak: string; sk: string; bucket?: string };
 
 function getHost()      { return process.env.MODELARK_HOST       ?? "open.byteplusapi.com"; }
 function getRegion()    { return process.env.MODELARK_REGION     ?? "ap-southeast-1"; }
@@ -76,9 +81,11 @@ function signRequest(params: {
   region: string;
   extraHeaders: Record<string, string>;  // must include content-type
   bodyHash: string;
+  ak?: string;
+  sk?: string;
 }): Record<string, string> {
-  const ak = cfg("MODELARK_AK");
-  const sk = cfg("MODELARK_SK");
+  const ak = required("byteplus_ak", params.ak);
+  const sk = required("byteplus_sk", params.sk);
   const { method, host, path, canonicalQuery, service, region, extraHeaders, bodyHash } = params;
 
   const now = new Date();
@@ -125,9 +132,11 @@ function signTosRequest(params: {
   region: string;
   extraHeaders: Record<string, string>;
   bodyHash: string;
+  ak?: string;
+  sk?: string;
 }): Record<string, string> {
-  const ak = cfg("MODELARK_AK");
-  const sk = cfg("MODELARK_SK");
+  const ak = required("byteplus_ak", params.ak);
+  const sk = required("byteplus_sk", params.sk);
   const { method, host, path, canonicalQuery, region, extraHeaders, bodyHash } = params;
 
   const now = new Date();
@@ -165,7 +174,7 @@ function signTosRequest(params: {
 }
 
 // Convenience wrapper for the ModelArk OpenAPI (POST / with Action query param)
-function buildSignedHeaders(action: string, body: string): { headers: Record<string, string> } {
+function buildSignedHeaders(action: string, body: string, creds?: Credentials): { headers: Record<string, string> } {
   const host = getHost();
   const region = getRegion();
   const service = getService();
@@ -183,6 +192,8 @@ function buildSignedHeaders(action: string, body: string): { headers: Record<str
     region,
     extraHeaders: { "content-type": "application/json" },
     bodyHash: sha256Hex(body),
+    ak: creds?.ak,
+    sk: creds?.sk,
   });
 
   return { headers };
@@ -201,11 +212,11 @@ export class ModelArkError extends Error {
   }
 }
 
-async function post<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+async function post<T>(action: string, payload: Record<string, unknown>, creds?: Credentials): Promise<T> {
   const host = getHost();
   const version = getVersion();
   const body = JSON.stringify(payload);
-  const { headers } = buildSignedHeaders(action, body);
+  const { headers } = buildSignedHeaders(action, body, creds);
 
   const url = `https://${host}/?Action=${encodeURIComponent(action)}&Version=${encodeURIComponent(version)}`;
   const res = await fetch(url, {
@@ -259,8 +270,9 @@ export async function uploadToTos(
   fileBuffer: Buffer,
   contentType: string,
   originalFilename: string,
+  creds?: Credentials,
 ): Promise<string> {
-  const bucket = cfg("MODELARK_TOS_BUCKET");
+  const bucket = required("byteplus_tos_bucket", creds?.bucket);
   const storageRegion = getRegion();
   const signingRegion = getTosRegion();
   // BytePlus TOS overseas endpoint: tos-{storage-region}.bytepluses.com
@@ -288,6 +300,8 @@ export async function uploadToTos(
       "x-tos-acl": "public-read",
     },
     bodyHash,
+    ak: creds?.ak,
+    sk: creds?.sk,
   });
 
   const url = `https://${host}${path}`;
@@ -357,12 +371,13 @@ export type ListAssetsPage = {
 export async function createAssetGroup(
   name: string,
   description = "",
+  creds?: Credentials,
 ): Promise<AssetGroupInfo> {
   const result = await post<{ Id: string }>("CreateAssetGroup", {
     Name: name,
     Description: description,
     GroupType: "AIGC",
-  });
+  }, creds);
   return { groupId: result.Id, name, description };
 }
 
@@ -374,20 +389,22 @@ export async function createAsset(
   groupId: string,
   url: string,
   assetType = "Image",
+  creds?: Credentials,
 ): Promise<string> {
   const result = await post<{ Id: string }>("CreateAsset", {
     GroupId: groupId,
     URL: url,
     AssetType: assetType,
-  });
+  }, creds);
   return result.Id;
 }
 
 /** Fetch the current status of a registered asset. */
-export async function getAsset(assetId: string): Promise<AssetInfo> {
+export async function getAsset(assetId: string, creds?: Credentials): Promise<AssetInfo> {
   const result = await post<{ Id?: string; Status?: string; AssetType?: string; URL?: string; Url?: string; FileUrl?: string; OriginUrl?: string; PreviewUrl?: string; ErrorMessage?: string }>(
     "GetAsset",
     { Id: assetId },
+    creds,
   );
   const rawUrl = result.URL ?? result.Url ?? result.FileUrl ?? result.OriginUrl ?? result.PreviewUrl;
   return {
@@ -403,6 +420,7 @@ export async function getAsset(assetId: string): Promise<AssetInfo> {
 export async function listAssetGroups(
   pageSize = 100,
   pageNumber = 1,
+  creds?: Credentials,
 ): Promise<{ groups: AssetGroupInfo[]; total: number }> {
   const result = await post<{
     Items?: unknown[];
@@ -413,7 +431,7 @@ export async function listAssetGroups(
     Filter: { GroupType: "AIGC" },
     PageSize: pageSize,
     PageNumber: pageNumber,
-  });
+  }, creds);
 
   const raw = (result.Items ?? result.GroupList ?? result.Groups ?? []) as Array<Record<string, unknown>>;
   return {
@@ -427,12 +445,12 @@ export async function listAssetGroups(
 }
 
 /** Fetch every asset group by paginating until all pages are consumed. */
-export async function listAllAssetGroups(): Promise<AssetGroupInfo[]> {
+export async function listAllAssetGroups(creds?: Credentials): Promise<AssetGroupInfo[]> {
   const all: AssetGroupInfo[] = [];
   const pageSize = 100;
   let page = 1;
   while (true) {
-    const { groups, total } = await listAssetGroups(pageSize, page);
+    const { groups, total } = await listAssetGroups(pageSize, page, creds);
     all.push(...groups);
     if (all.length >= total || groups.length < pageSize) break;
     page++;
@@ -445,6 +463,7 @@ export async function listAssets(
   groupId: string,
   pageSize = 50,
   pageNumber = 1,
+  creds?: Credentials,
 ): Promise<ListAssetsPage> {
   const result = await post<{
     Items?: unknown[];
@@ -454,7 +473,7 @@ export async function listAssets(
     Filter: { GroupIds: [groupId], GroupType: "AIGC" },
     PageSize: pageSize,
     PageNumber: pageNumber,
-  });
+  }, creds);
 
   const raw = (result.Items ?? result.AssetList ?? []) as Array<Record<string, unknown>>;
   const total = result.TotalCount ?? raw.length;
@@ -476,11 +495,11 @@ export async function listAssets(
 }
 
 /** Paginate through all assets in a group. */
-export async function listAllAssets(groupId: string): Promise<AssetInfo[]> {
+export async function listAllAssets(groupId: string, creds?: Credentials): Promise<AssetInfo[]> {
   const all: AssetInfo[] = [];
   let page = 1;
   while (true) {
-    const result = await listAssets(groupId, 50, page);
+    const result = await listAssets(groupId, 50, page, creds);
     all.push(...result.assets);
     if (!result.nextToken) break;
     page++;

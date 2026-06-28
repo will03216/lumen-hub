@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BytePlusError, generateShots } from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -26,9 +27,12 @@ export async function POST(req: NextRequest) {
     const referenceImageCount = typeof body.referenceImageCount === "number" ? body.referenceImageCount : 0;
     const hasFirstFrame = body.hasFirstFrame === true;
 
-    const result = await generateShots({ concept, shotCount, durationEach, referenceImageCount, hasFirstFrame });
+    const { byteplus } = await getUserKeys();
+    const result = await generateShots({ concept, shotCount, durationEach, referenceImageCount, hasFirstFrame }, byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof BytePlusError) {
       logBytePlusError("story.generate-shots", err, startedAt);
       return NextResponse.json(

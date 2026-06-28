@@ -9,6 +9,7 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import type { NextRequest } from "next/server";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
 
@@ -76,10 +77,11 @@ export async function GET(req: NextRequest) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return new Response("http/https only", { status: 400 });
   }
+  try { assertSafeUrl(url); } catch { return new Response("blocked", { status: 403 }); }
 
   try {
     const { buffer, contentType } = await fetchRemote(raw);
-    return new Response(buffer, {
+    return new Response(buffer as unknown as BodyInit, {
       status: 200,
       headers: {
         "Content-Type": contentType,

@@ -7,7 +7,9 @@
  * lib/library/assets.ts.
  */
 
-const STORAGE_KEY = "lumen.library.asset-groups.v1";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.library.asset-groups.v1");
 
 export type AssetGroup = {
   id: string;
@@ -28,7 +30,7 @@ const EMPTY: StoreShape = { version: 1, groups: {} };
 function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 1, groups: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 1 || !parsed.groups) return EMPTY;
@@ -40,7 +42,7 @@ function readStore(): StoreShape {
 
 function writeStore(s: StoreShape): void {
   if (typeof window === "undefined") return;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { /* quota */ }
+  try { localStorage.setItem(STORAGE_KEY(), JSON.stringify(s)); } catch { /* quota */ }
 }
 
 let cache: StoreShape | null = null;

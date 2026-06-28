@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,7 @@ export async function GET(req: NextRequest) {
 
   // img-only mode: fetch a single image and return it as a base64 data URI
   if (!target && imgTarget) {
+    try { assertSafeUrl(new URL(imgTarget)); } catch { return Response.json({ imageDataUri: null }); }
     const dataUri = await fetchImageAsDataUri(imgTarget);
     return Response.json({ imageDataUri: dataUri ?? null });
   }
@@ -32,6 +34,7 @@ export async function GET(req: NextRequest) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return Response.json({ error: "http/https only" }, { status: 400 });
   }
+  try { assertSafeUrl(url); } catch { return Response.json({ error: "blocked" }, { status: 403 }); }
 
   // Jina.ai reader — default path. Returns clean reader-mode markdown with ads,
   // embeds, and navigation stripped. Falls back to direct HTML fetch on failure.
@@ -448,6 +451,7 @@ async function fetchImageAsDataUri(src: string): Promise<string | undefined> {
     return undefined;
   }
   if (imgUrl.protocol !== "http:" && imgUrl.protocol !== "https:") return undefined;
+  try { assertSafeUrl(imgUrl); } catch { return undefined; }
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);

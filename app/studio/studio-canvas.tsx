@@ -31,11 +31,13 @@ import { VideoGenNode } from "./nodes/video-gen-node";
 import { PreviewNode } from "./nodes/preview-node";
 import { WebExtractNode } from "./nodes/web-extract-node";
 import { PromptComposerNode } from "./nodes/prompt-composer-node";
+import { PromptOptimizerNode } from "./nodes/prompt-optimizer-node";
 import { LongVideoNode } from "./nodes/long-video-node";
 import { ArticleIngesterNode } from "./nodes/article-ingester-node";
 import { ArticleNarrationNode } from "./nodes/article-narration-node";
 import { MusicOverlayNode } from "./nodes/music-overlay-node";
 import { VideoStitchNode } from "./nodes/video-stitch-node";
+import { UrlInputNode } from "./nodes/url-input-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -56,11 +58,13 @@ const nodeTypes: NodeTypes = {
   preview: PreviewNode,
   webExtract: WebExtractNode,
   promptComposer: PromptComposerNode,
+  promptOptimizer: PromptOptimizerNode,
   longVideo: LongVideoNode,
   articleIngester: ArticleIngesterNode,
   articleNarration: ArticleNarrationNode,
   musicOverlay: MusicOverlayNode,
   videoStitch: VideoStitchNode,
+  urlInput: UrlInputNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with

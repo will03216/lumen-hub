@@ -7,6 +7,7 @@ import {
   logMinimaxError,
   logRouteError,
 } from "@/lib/server-log";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 
@@ -30,12 +31,15 @@ export async function GET(
     }
     const provider =
       (model && findVideoModel(model)?.provider) ?? "byteplus";
+    const keys = await getUserKeys();
     const result =
       provider === "minimax"
-        ? await getVideoTaskMinimax(id)
-        : await getVideoTask(id);
+        ? await getVideoTaskMinimax(id, { apiKey: keys.minimax, groupId: keys.minimaxGroupId })
+        : await getVideoTask(id, keys.byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     // Forward upstream status so the classifier can route 404 →
     // "task-expired", 429 → rate-limit, etc.
     if (err instanceof BytePlusError) {

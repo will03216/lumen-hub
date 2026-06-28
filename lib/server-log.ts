@@ -24,12 +24,14 @@ export type RouteTag =
   | "video.create"
   | "video.poll"
   | "audio"
+  | "audio.upload"
   | "caption"
   | "story.generate-prompts"
   | "story.generate-shots"
   | "compose-prompt"
   | "video.stitch"
-  | "article-to-prompt";
+  | "article-to-prompt"
+  | "optimize-prompt";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,
  *  but we fall back to `console.error` with a space-separated fallback

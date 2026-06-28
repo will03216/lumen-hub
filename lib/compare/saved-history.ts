@@ -68,7 +68,9 @@ type HistoryStorage = {
   video: { A: HistoryItem[]; B: HistoryItem[] };
 };
 
-const STORAGE_KEY = "lumen.compare.history";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.compare.history");
 
 const EMPTY_STORAGE: HistoryStorage = {
   image: { A: [], B: [] },
@@ -81,7 +83,7 @@ const EMPTY_STORAGE: HistoryStorage = {
 function readAll(): HistoryStorage {
   if (typeof window === "undefined") return EMPTY_STORAGE;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY());
     if (!raw) return EMPTY_STORAGE;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return EMPTY_STORAGE;
@@ -133,7 +135,7 @@ function isValidItem(it: unknown, expectedKind: CompareKind): boolean {
 function writeAll(storage: HistoryStorage): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
+    window.localStorage.setItem(STORAGE_KEY(), JSON.stringify(storage));
   } catch {
     // ignore
   }
@@ -187,7 +189,7 @@ export function clearHistoryBucket(
 export function subscribeSavedHistory(onChange: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   const handler = (e: StorageEvent) => {
-    if (e.key !== STORAGE_KEY) return;
+    if (e.key !== STORAGE_KEY()) return;
     onChange();
   };
   window.addEventListener("storage", handler);

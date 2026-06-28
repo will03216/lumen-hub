@@ -33,11 +33,13 @@ export const NODE_TYPE_IDS = [
   "preview",
   "webExtract",
   "promptComposer",
+  "promptOptimizer",
   "longVideo",
   "articleIngester",
   "articleNarration",
   "musicOverlay",
   "videoStitch",
+  "urlInput",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 

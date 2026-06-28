@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAsset, ModelArkError } from "@/lib/modelark";
+import { getUserKeys, missingKeyResponse, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 
@@ -15,10 +16,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+
+  const { byteplusAk: ak, bytelusSk: sk } = await getUserKeys();
+  if (!ak) return missingKeyResponse("byteplus_ak");
+  if (!sk) return missingKeyResponse("byteplus_sk");
+
   try {
-    const asset = await getAsset(id);
+    const asset = await getAsset(id, { ak, sk });
     return NextResponse.json(asset);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof ModelArkError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.status ?? 500 });
     }

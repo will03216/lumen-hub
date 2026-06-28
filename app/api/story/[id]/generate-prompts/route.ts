@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BytePlusError, generateScenePrompts, type ScenePromptInput } from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -43,11 +44,14 @@ export async function POST(
   }
 
   const scenes = body.scenes as ScenePromptInput[];
+  const { byteplus } = await getUserKeys();
 
   try {
-    const result = await generateScenePrompts(body.story, scenes);
+    const result = await generateScenePrompts(body.story, scenes, byteplus);
     return NextResponse.json({ scenes: result });
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof BytePlusError) {
       logBytePlusError("story.generate-prompts", err, startedAt, {
         scene_count: scenes.length,

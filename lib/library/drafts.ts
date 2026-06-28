@@ -43,7 +43,9 @@ import {
 } from "./assets";
 import { mirrorAsset } from "./mirror";
 
-const STORAGE_KEY = "lumen.library.drafts.v1";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.library.drafts.v1");
 
 type StoreShape = {
   version: 1;
@@ -57,7 +59,7 @@ const EMPTY_STORE: StoreShape = { version: 1, drafts: {} };
 function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 1, drafts: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 1 || !parsed.drafts) return EMPTY_STORE;
@@ -70,7 +72,7 @@ function readStore(): StoreShape {
 function writeStore(store: StoreShape): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
   } catch {
     // Quota / serialization swallowed — same trade-off as assets.ts.
   }
@@ -232,7 +234,7 @@ export function __resetForTests(): void {
   listeners.clear();
   if (typeof window !== "undefined") {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY());
     } catch {
       // ignore
     }

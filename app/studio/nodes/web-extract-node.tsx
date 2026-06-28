@@ -325,7 +325,7 @@ export const WebExtractNode = memo(function WebExtractNode({
       {/* ── Idle hint ─────────────────────────────────────────────── */}
       {extractState.status === "idle" && !hasText && !hasMedia && (
         <div className="rounded-[8px] border border-border bg-panel p-2 font-mono text-[10px] leading-[1.6] text-ink-dim">
-          Paste a URL → <span className="text-ink">Extract</span> → edit text → select one or more images → <span className="text-ink">Run</span> to upload as BytePlus assets and emit <span className="text-ink">assetId</span>.
+          Paste a URL → <span className="text-ink">Extract</span> → edit text → select one or more images → <span className="text-ink">Run</span> to save them to your Library and emit their <span className="text-ink">image URLs</span>.
         </div>
       )}
     </NodeShell>
@@ -335,7 +335,7 @@ export const WebExtractNode = memo(function WebExtractNode({
 export const webExtractSpec: NodeTypeSpec<WebExtractForm> = {
   type: "webExtract",
   label: "Web Extract",
-  description: "Scrape a URL — review/edit text, pick multiple images/videos, upload as BytePlus assets.",
+  description: "Scrape a URL — review/edit text, pick multiple images/videos, kept local in your Library.",
   inputs: [],
   outputs: [
     { id: "text", label: "text" },
@@ -374,47 +374,24 @@ export const webExtractSpec: NodeTypeSpec<WebExtractForm> = {
       return { text, images: "", assetId: "" };
     }
 
-    // Upload all selected media in parallel → BytePlus asset library
-    onProgress?.(`Uploading ${selectedMedia.length} item${selectedMedia.length > 1 ? "s" : ""}…`);
-    const uploads = await Promise.all(
-      selectedMedia.map(async (item) => {
-        const uploadRes = await fetch("/api/web-extract/upload-media", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: item.url, kind: item.type, pageUrl: form.url }),
-          signal,
-        });
-        const uploadJson = (await uploadRes.json()) as {
-          error?: string;
-          assetId?: string;
-          tosUrl?: string;
-          groupId?: string;
-        };
-        if (!uploadRes.ok) throw new Error(uploadJson.error ?? `Upload failed: ${item.url}`);
-        if (!uploadJson.assetId || !uploadJson.tosUrl) {
-          throw new Error(`Upload response missing assetId: ${item.url}`);
-        }
-
-        const title = item.url.split("/").pop()?.split("?")[0] ?? "web-extract";
-        stageImportedAsset({
-          kind: item.type,
-          url: uploadJson.tosUrl,
-          title,
-          tags: ["web-extract"],
-          byteplusAssetId: uploadJson.assetId,
-          byteplusGroupId: uploadJson.groupId,
-        });
-
-        return { assetId: uploadJson.assetId, tosUrl: uploadJson.tosUrl };
-      }),
-    );
-
-    const assetIds = uploads.map((u) => u.assetId).join("\n");
+    // Keep selected media local for now: stage each into the browser Library
+    // with its original URL — no TOS upload / ModelArk asset registration.
+    // (Avoids the ListAssetGroups 429 stampede; downstream nodes consume the
+    // raw image URLs via the `images` output.)
+    for (const item of selectedMedia) {
+      const title = item.url.split("/").pop()?.split("?")[0] ?? "web-extract";
+      stageImportedAsset({
+        kind: item.type,
+        url: item.url,
+        title,
+        tags: ["web-extract"],
+      });
+    }
 
     return {
       text,
       images: selectedImageUrls,
-      assetId: assetIds,
+      assetId: "",
     };
   },
 };

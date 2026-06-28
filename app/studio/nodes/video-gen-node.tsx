@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useMemo, useState } from "react";
-import { useReactFlow, type NodeProps } from "@xyflow/react";
+import { useEdges, useReactFlow, type NodeProps } from "@xyflow/react";
 import { Terminal } from "lucide-react";
 import {
   VIDEO_MODELS,
@@ -28,6 +28,15 @@ export type VideoGenForm = {
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_TRIES = 200;
 
+function isPublicUrl(s: string): boolean {
+  return (
+    (s.startsWith("https://") || s.startsWith("http://")) &&
+    !s.startsWith("data:") &&
+    !s.startsWith("blob:") &&
+    !/localhost|127\.0\.0\.1/.test(s)
+  );
+}
+
 /** Parse a wire value emitted by the Asset node's assetId output.
  *  Format: "<assetId>|video" for videos, plain "<assetId>" for images. */
 function parseAssetRef(raw: string): { asset_id: string; type: "image" | "video" } {
@@ -39,14 +48,44 @@ function parseAssetRef(raw: string): { asset_id: string; type: "image" | "video"
   return { asset_id: raw, type: "image" };
 }
 
+/** Derive a compact mode label from the set of wired input handles. */
+function modeLabel(handles: Set<string>): string {
+  const hasFirst = handles.has("image");
+  const hasLast = handles.has("lastFrame");
+  const hasRefImgs = handles.has("refImages");
+  const hasRefAssets = handles.has("references");
+  const hasRefs = hasRefImgs || hasRefAssets;
+
+  if (!hasFirst && !hasLast && !hasRefs) return "T2V";
+  const parts: string[] = [];
+  if (hasFirst && hasLast) parts.push("first+last");
+  else if (hasFirst) parts.push("first frame");
+  else if (hasLast) parts.push("last frame only");
+  if (hasRefImgs && hasRefAssets) parts.push("URL refs + assets");
+  else if (hasRefImgs) parts.push("URL refs");
+  else if (hasRefAssets) parts.push("asset refs");
+  return parts.join(" · ") || "I2V";
+}
+
 export const VideoGenNode = memo(function VideoGenNode({
   id,
   data,
   selected,
 }: NodeProps) {
   const { setNodes, getNodes, getEdges } = useReactFlow();
+  const allEdges = useEdges();
   const d = data as StudioNodeData<VideoGenForm>;
   const [curlState, setCurlState] = useState<"idle" | "copying" | "copied">("idle");
+
+  // Reactive mode indicator — updates whenever edges change.
+  const mode = useMemo(() => {
+    const handles = new Set(
+      allEdges
+        .filter((e) => e.target === id && e.targetHandle)
+        .map((e) => e.targetHandle as string),
+    );
+    return modeLabel(handles);
+  }, [allEdges, id]);
 
   const update = useCallback(
     (patch: Partial<VideoGenForm>) => {
@@ -87,6 +126,8 @@ export const VideoGenNode = memo(function VideoGenNode({
     const portInputs = resolvePortInputs();
     const prompt = portInputs.prompt ?? "(connect a prompt port)";
     const image = portInputs.image;
+    const lastFrame = portInputs.lastFrame;
+    const refImagesRaw = portInputs.refImages;
     const referencesRaw = portInputs.references;
 
     const modelCaps = findVideoModel(d.form.model)?.caps;
@@ -108,20 +149,27 @@ export const VideoGenNode = memo(function VideoGenNode({
     const seedNum = d.form.seed.trim() ? Number(d.form.seed) : NaN;
     if (Number.isFinite(seedNum)) params.seed = seedNum;
     if (d.form.model.startsWith("dreamina-seedance-2-")) params.audio = d.form.audio;
-    if (image) {
-      const isPublicUrl =
-        (image.startsWith("https://") || image.startsWith("http://")) &&
-        !image.startsWith("data:") &&
-        !image.startsWith("blob:") &&
-        !/localhost|127\.0\.0\.1/.test(image);
-      if (isPublicUrl) params.images = [{ url: image, role: "first_frame" }];
+
+    const images: Array<{ url: string; role: string }> = [];
+    if (image && isPublicUrl(image)) images.push({ url: image, role: "first_frame" });
+    if (lastFrame && isPublicUrl(lastFrame)) images.push({ url: lastFrame, role: "last_frame" });
+    if (refImagesRaw) {
+      refImagesRaw
+        .split("\n")
+        .map((u) => u.trim())
+        .filter(isPublicUrl)
+        .forEach((url) => images.push({ url, role: "reference_image" }));
     }
-    if (d.form.model.startsWith("dreamina-seedance-2-") && referencesRaw) {
-      params.references = referencesRaw
+    if (images.length > 0) params.images = images;
+
+    const isV2 = d.form.model.startsWith("dreamina-seedance-2-");
+    if (isV2 && referencesRaw) {
+      const refs = referencesRaw
         .split("\n")
         .map((r) => r.trim())
         .filter(Boolean)
         .map((r) => ({ role: "subject", ...parseAssetRef(r) }));
+      if (refs.length > 0) params.references = refs;
     }
 
     setCurlState("copying");
@@ -141,8 +189,6 @@ export const VideoGenNode = memo(function VideoGenNode({
     }
   }, [d.form, resolvePortInputs]);
 
-  // Caps depend on the chosen engine; restrict the dropdowns so the user
-  // can't pick a value the upstream API will reject (e.g. 1080p on 2.0).
   const caps = useMemo(
     () => findVideoModel(d.form.model)?.caps,
     [d.form.model],
@@ -158,13 +204,27 @@ export const VideoGenNode = memo(function VideoGenNode({
       selected={selected ?? false}
       width={320}
     >
+      {/* ── Mode indicator ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-[9px] uppercase tracking-[0.10em] text-ink-mute">
+          Mode
+        </span>
+        <span className="rounded-full border border-border bg-panel px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.10em] text-ink-dim">
+          {mode}
+        </span>
+        {mode !== "T2V" && !isV2 && (mode.includes("refs") || mode.includes("URL")) && (
+          <span className="font-mono text-[9px] text-amber-400/80" title="Ref images require Seedance 2.0">
+            ⚠ V2 only
+          </span>
+        )}
+      </div>
+
       <Field label="Model">
         <select
           value={d.form.model}
           onChange={(e) => {
             const next = e.target.value;
             const cap = findVideoModel(next)?.caps;
-            // Snap dependent fields back into the new engine's allowed range
             update({
               model: next,
               resolution: cap?.resolutions.includes(
@@ -333,11 +393,14 @@ function Field({
 export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
   type: "videoGen",
   label: "Video Gen",
-  description: "Generate a clip via Seedance — t2v, i2v, or R2V if 'reference' (BytePlus asset_id) is wired.",
+  description:
+    "Generate a clip via Seedance. Wire 'first frame' for I2V, add 'last frame' for bookend mode, or wire 'ref images' (URLs) / 'ref assets' (asset_ids) for R2V.",
   inputs: [
     { id: "prompt", label: "prompt" },
-    { id: "image", label: "image" },
-    { id: "references", label: "references (asset_ids, multi-wire)" },
+    { id: "image", label: "first frame" },
+    { id: "lastFrame", label: "last frame" },
+    { id: "refImages", label: "ref images (URLs)" },
+    { id: "references", label: "ref assets (asset_ids)" },
   ],
   outputs: [{ id: "url", label: "url" }],
   defaults: {
@@ -351,7 +414,7 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
   },
   hashInputs: (form, inputs) =>
     [
-      "v",
+      "v2",
       form.model,
       form.resolution,
       form.duration,
@@ -361,6 +424,8 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
       form.audio ? 1 : 0,
       inputs.prompt ?? "",
       inputs.image ?? "",
+      inputs.lastFrame ?? "",
+      inputs.refImages ?? "",
       inputs.references ?? "",
     ].join("|"),
   execute: async ({ form, inputs, signal, onProgress, projectId }) => {
@@ -369,9 +434,6 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
 
     const isV2 = form.model.startsWith("dreamina-seedance-2-");
 
-    // Clamp duration to the nearest value the chosen model accepts.
-    // The model picker snaps when the user changes model via UI, but a
-    // canvas loaded from an older save may still have a stale value.
     const modelCaps = findVideoModel(form.model)?.caps;
     const validDurations = modelCaps?.durations ?? [5];
     const duration = validDurations.includes(form.duration)
@@ -391,25 +453,39 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
     const seedNum = form.seed.trim() ? Number(form.seed) : NaN;
     if (Number.isFinite(seedNum)) body.seed = seedNum;
     if (isV2) body.audio = form.audio;
+
+    // Build images array: first frame + last frame + URL-based reference images.
+    // URL references use role "reference_image" inside the content array —
+    // the `references` top-level field only accepts BytePlus asset_ids, not URLs.
+    const imageEntries: Array<{ url: string; role: string }> = [];
     if (inputs.image) {
-      const isPublicUrl =
-        (inputs.image.startsWith("https://") || inputs.image.startsWith("http://")) &&
-        !inputs.image.startsWith("data:") &&
-        !inputs.image.startsWith("blob:") &&
-        !/localhost|127\.0\.0\.1/.test(inputs.image);
-      if (isPublicUrl) {
-        body.images = [{ url: inputs.image, role: "first_frame" }];
-      } else if (!inputs.references) {
+      if (isPublicUrl(inputs.image)) {
+        imageEntries.push({ url: inputs.image, role: "first_frame" });
+      } else if (!inputs.refImages && !inputs.references) {
         throw new Error(
-          "The image URL is not publicly accessible (it's a local or blob URL). " +
-          "Wire the Asset node's assetId output to the 'references' port instead, or upload the image via the BytePlus Asset Library first.",
+          "The first-frame URL is not publicly accessible. " +
+          "Wire an Asset node's assetId to 'ref assets' instead, or use a public URL.",
         );
       }
-      // else: non-public URL but references port is also wired → skip image, use references only
     }
-    // Seedance 2.0 R2V: BytePlus asset_id wired from an Asset node's
-    // assetId port is passed as a reference subject — stable across CDN
-    // expiry because BytePlus resolves it internally.
+    if (inputs.lastFrame) {
+      if (isPublicUrl(inputs.lastFrame)) {
+        imageEntries.push({ url: inputs.lastFrame, role: "last_frame" });
+      } else {
+        throw new Error("The last-frame URL must be a publicly accessible https:// URL.");
+      }
+    }
+    if (inputs.refImages) {
+      inputs.refImages
+        .split("\n")
+        .map((u) => u.trim())
+        .filter(isPublicUrl)
+        .forEach((url) => imageEntries.push({ url, role: "reference_image" }));
+    }
+    if (imageEntries.length > 0) body.images = imageEntries;
+
+    // Build references array: asset-id refs only (V2 only).
+    // URL-based refs go via images[] above, not here.
     if (isV2 && inputs.references) {
       const refs = inputs.references
         .split("\n")
@@ -419,6 +495,12 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
       if (refs.length > 0) body.references = refs;
     }
 
+    // Derive mode for the draft record.
+    const hasFirst = !!inputs.image;
+    const hasLast = !!inputs.lastFrame;
+    const hasRefs = !!(inputs.refImages || inputs.references);
+    const mode = hasFirst && hasLast ? "i2v-fl" : hasFirst ? "i2v" : hasRefs ? "r2v" : "t2v";
+
     onProgress?.("Submitting task…");
     const res = await fetch("/api/video", {
       method: "POST",
@@ -426,17 +508,11 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
       body: JSON.stringify(body),
       signal,
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error ?? "video task creation failed");
-    const taskId: string | undefined = data?.id;
+    const responseData = await res.json();
+    if (!res.ok) throw new Error(responseData?.error ?? "video task creation failed");
+    const taskId: string | undefined = responseData?.id;
     if (!taskId) throw new Error("No task id returned by /api/video");
 
-    // Poll loop: same cadence and ceiling as components/video-generator.tsx
-    // (3s × 200 ≈ 10 minutes wall-clock max). Cancellation lands either
-    // mid-fetch (signal hits the abort handler) or mid-sleep (sleepCancellable
-    // rejects on abort).
-    // Pass ?model= so the poll route dispatches to the correct provider
-    // (BytePlus vs Minimax — without it, Minimax task IDs go to BytePlus).
     for (let tries = 1; tries <= POLL_MAX_TRIES; tries++) {
       await sleepCancellable(POLL_INTERVAL_MS, signal);
       onProgress?.(`Polling · try ${tries}/${POLL_MAX_TRIES}`);
@@ -450,10 +526,6 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
       if (status === "succeeded") {
         const url: string | undefined = pollData?.content?.video_url;
         if (!url) throw new Error("Succeeded but no video url");
-        // Stage as a draft — keyed on BytePlus task id so a re-execute
-        // with the same inputs (cache hit at runner level) never reaches
-        // here, and accidental double-fires upsert. The user commits to
-        // Library via the Drafts band.
         stageGeneratedVideo({
           taskId,
           videoUrl: url,
@@ -462,7 +534,7 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
           ratio: form.ratio,
           duration: form.duration,
           resolution: form.resolution,
-          mode: inputs.image ? "i2v" : "t2v",
+          mode,
           seed: Number.isFinite(seedNum) ? seedNum : undefined,
           projectId,
         });

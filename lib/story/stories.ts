@@ -13,7 +13,9 @@
  * edits the script structure.
  */
 
-const STORAGE_KEY = "lumen.story.projects.v1";
+import { userKey } from '@/lib/storage-user';
+
+const STORAGE_KEY = () => userKey("lumen.story.projects.v1");
 
 // ─────────────────────────── Types ────────────────────────────────────────
 
@@ -89,7 +91,7 @@ const EMPTY_STORE: StoreShape = { version: 1, stories: {} };
 function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 1, stories: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 1 || !parsed.stories) return EMPTY_STORE;
@@ -102,7 +104,7 @@ function readStore(): StoreShape {
 function writeStore(store: StoreShape): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
   } catch {
     // Quota / private-mode failures are best-effort.
   }

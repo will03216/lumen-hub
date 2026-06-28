@@ -22,6 +22,7 @@ import fs from "fs";
 import os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
+import { assertSafeUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -109,6 +110,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
     await fs.promises.writeFile(dest, Buffer.from(b64, "base64"));
     return;
   }
+  assertSafeUrl(new URL(url));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed: ${url} → ${res.status}`);
   await fs.promises.writeFile(dest, Buffer.from(await res.arrayBuffer()));

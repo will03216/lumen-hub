@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BytePlusError, composePrompt } from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -19,6 +20,7 @@ type ComposeBody = {
 export async function POST(req: NextRequest) {
   const startedAt = Date.now();
   try {
+    const { byteplus } = await getUserKeys();
     const body = (await req.json()) as ComposeBody;
     const targetModel = body.targetModel ?? "generic";
     if (!["seedream", "seedance", "generic"].includes(targetModel)) {
@@ -33,9 +35,11 @@ export async function POST(req: NextRequest) {
       temperature: typeof body.temperature === "number" ? body.temperature : undefined,
       maxTokens: typeof body.maxTokens === "number" ? body.maxTokens : undefined,
       extraInstruction: body.extraInstruction,
-    });
+    }, byteplus);
     return NextResponse.json(result);
   } catch (err) {
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
     if (err instanceof BytePlusError) {
       logBytePlusError("compose-prompt", err, startedAt);
       return NextResponse.json(

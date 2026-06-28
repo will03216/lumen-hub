@@ -12,9 +12,18 @@
  *   v2 → v3  Adds `folders: {}` to the store; projects gain optional `folderId`
  */
 
-const STORAGE_KEY = "lumen.studio.projects.v3";
-const V2_KEY = "lumen.studio.projects.v2";
-const LEGACY_KEY = "lumen.studio.canvas.v1";
+import { userKey } from '@/lib/storage-user';
+import {
+  syncProjectUpsert,
+  syncProjectDelete,
+  syncFolderUpsert,
+  syncFolderDelete,
+  fetchCloudStudio,
+} from '@/lib/cloud/project-sync';
+
+const STORAGE_KEY = () => userKey("lumen.studio.projects.v3");
+const V2_KEY = () => userKey("lumen.studio.projects.v2");
+const LEGACY_KEY = () => userKey("lumen.studio.canvas.v1");
 
 // ─────────────────────────── Types ─────────────────────────────────────
 
@@ -78,7 +87,7 @@ function readStore(): StoreShape {
   if (typeof window === "undefined") return EMPTY_STORE;
   migrateLegacyIfNeeded();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return { version: 3, projects: {}, folders: {} };
     const parsed = JSON.parse(raw) as StoreShape;
     if (parsed.version !== 3 || !parsed.projects) return EMPTY_STORE;
@@ -91,13 +100,73 @@ function readStore(): StoreShape {
 function writeStore(store: StoreShape): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
   } catch {
     // Quota exceeded, private mode, etc. Persistence is best-effort.
   }
   cachedList = null;
   cachedFolders = null;
   listeners.forEach((cb) => cb());
+}
+
+// ─────────────────────── Cloud write-through ────────────────────────────
+// Fire-and-forget mirror to /api/studio/sync. Gated on `hydrated` so an
+// empty/stale local store can't push over server rows before the first pull
+// completes (the server also guards with an updated_at check). Mirrors the
+// Library write-through in lib/library/assets.ts.
+
+let hydrated = false;
+
+function pushProject(p: Project): void {
+  if (typeof window !== "undefined" && hydrated) void syncProjectUpsert(p);
+}
+function pushProjectDelete(id: string): void {
+  if (typeof window !== "undefined" && hydrated) void syncProjectDelete(id);
+}
+function pushFolder(f: Folder): void {
+  if (typeof window !== "undefined" && hydrated) void syncFolderUpsert(f);
+}
+function pushFolderDelete(id: string): void {
+  if (typeof window !== "undefined" && hydrated) void syncFolderDelete(id);
+}
+
+/**
+ * Pull the user's Studio store from the server and merge it into the local
+ * store (newest-updatedAt wins for projects; additive for folders). Called
+ * once the Clerk user resolves (see components/StorageUserInit.tsx) so a
+ * fresh device restores all canvas work. After the first pull, enables cloud
+ * write-through and backs up any local-only / locally-newer records.
+ */
+export async function hydrateFromCloud(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const remote = await fetchCloudStudio();
+
+  if (remote) {
+    const store = readStore();
+    for (const rp of remote.projects) {
+      const local = store.projects[rp.id];
+      if (!local || rp.updatedAt >= local.updatedAt) store.projects[rp.id] = rp;
+    }
+    for (const rf of remote.folders) {
+      if (!store.folders[rf.id]) store.folders[rf.id] = rf;
+    }
+    writeStore(store);
+  }
+
+  hydrated = true;
+
+  // Back up records the server is missing or that are newer locally. Safe even
+  // if the pull failed (remote === null): the server's updated_at guard rejects
+  // any push older than what it already holds.
+  const store = readStore();
+  for (const p of Object.values(store.projects)) {
+    const r = remote?.projects.find((x) => x.id === p.id);
+    if (!r || p.updatedAt > r.updatedAt) void syncProjectUpsert(p);
+  }
+  const remoteFolderIds = new Set(remote?.folders.map((f) => f.id));
+  for (const f of Object.values(store.folders)) {
+    if (!remoteFolderIds.has(f.id)) void syncFolderUpsert(f);
+  }
 }
 
 // ─────────────────────── Subscription / cache ───────────────────────────
@@ -138,12 +207,12 @@ function migrateLegacyIfNeeded(): void {
   if (typeof window === "undefined") return;
   try {
     // If v3 already has data, nothing to do.
-    const v3raw = localStorage.getItem(STORAGE_KEY);
+    const v3raw = localStorage.getItem(STORAGE_KEY());
     const v3 = v3raw ? (JSON.parse(v3raw) as StoreShape) : null;
     if (v3 && v3.projects && Object.keys(v3.projects).length > 0) return;
 
     // Migrate from v2 (multi-project, no folders)
-    const v2raw = localStorage.getItem(V2_KEY);
+    const v2raw = localStorage.getItem(V2_KEY());
     if (v2raw) {
       const v2 = JSON.parse(v2raw) as { version: 2; projects: Record<string, Project> };
       if (v2?.version === 2 && v2.projects) {
@@ -152,13 +221,13 @@ function migrateLegacyIfNeeded(): void {
           projects: v2.projects,
           folders: {},
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+        localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
         return;
       }
     }
 
     // Migrate from v1 (single canvas)
-    const legacyRaw = localStorage.getItem(LEGACY_KEY);
+    const legacyRaw = localStorage.getItem(LEGACY_KEY());
     if (!legacyRaw) return;
     const legacy = JSON.parse(legacyRaw) as {
       version: 1;
@@ -166,7 +235,7 @@ function migrateLegacyIfNeeded(): void {
       edges: PersistedEdge[];
     };
     if (legacy?.version !== 1) {
-      localStorage.removeItem(LEGACY_KEY);
+      localStorage.removeItem(LEGACY_KEY());
       return;
     }
 
@@ -184,8 +253,8 @@ function migrateLegacyIfNeeded(): void {
       projects: { [id]: project },
       folders: {},
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-    localStorage.removeItem(LEGACY_KEY);
+    localStorage.setItem(STORAGE_KEY(), JSON.stringify(store));
+    localStorage.removeItem(LEGACY_KEY());
   } catch {
     // Legacy data corrupted — drop it silently.
   }
@@ -232,6 +301,7 @@ export function createProject(opts: {
   };
   store.projects[id] = project;
   writeStore(store);
+  pushProject(project);
   return project;
 }
 
@@ -250,6 +320,7 @@ export function updateProject(
   };
   store.projects[id] = next;
   writeStore(store);
+  pushProject(next);
   return next;
 }
 
@@ -258,6 +329,7 @@ export function deleteProject(id: string): void {
   if (!store.projects[id]) return;
   delete store.projects[id];
   writeStore(store);
+  pushProjectDelete(id);
 }
 
 export function duplicateProject(id: string): Project | null {
@@ -278,12 +350,14 @@ export function moveProjectToFolder(
   const store = readStore();
   const project = store.projects[projectId];
   if (!project) return;
-  store.projects[projectId] = {
+  const moved: Project = {
     ...project,
     folderId: folderId ?? undefined,
     updatedAt: Date.now(),
   };
+  store.projects[projectId] = moved;
   writeStore(store);
+  pushProject(moved);
 }
 
 // ─────────────────────────── Folder API ────────────────────────────────
@@ -302,6 +376,7 @@ export function createFolder(name: string): Folder {
   };
   store.folders[folder.id] = folder;
   writeStore(store);
+  pushFolder(folder);
   return folder;
 }
 
@@ -309,8 +384,10 @@ export function renameFolder(id: string, name: string): void {
   const store = readStore();
   const folder = store.folders[id];
   if (!folder) return;
-  store.folders[id] = { ...folder, name: name.trim() || folder.name };
+  const next: Folder = { ...folder, name: name.trim() || folder.name };
+  store.folders[id] = next;
   writeStore(store);
+  pushFolder(next);
 }
 
 export function deleteFolder(id: string): void {
@@ -318,12 +395,17 @@ export function deleteFolder(id: string): void {
   if (!store.folders[id]) return;
   delete store.folders[id];
   // Unassign all projects that belonged to this folder.
+  const unfiled: Project[] = [];
   for (const project of Object.values(store.projects)) {
     if (project.folderId === id) {
-      store.projects[project.id] = { ...project, folderId: undefined };
+      const next = { ...project, folderId: undefined, updatedAt: Date.now() };
+      store.projects[project.id] = next;
+      unfiled.push(next);
     }
   }
   writeStore(store);
+  pushFolderDelete(id);
+  for (const p of unfiled) pushProject(p);
 }
 
 // ─────────────────────────── Helpers ───────────────────────────────────

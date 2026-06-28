@@ -30,17 +30,14 @@
  */
 
 import type { ImageGenResponse } from "./byteplus";
+import { MissingKeyError } from "@/lib/server/missing-key";
 
 const QUEUE_BASE = "https://queue.fal.run";
 
-function apiKey(): string {
-  const key = process.env.FAL_API_KEY;
-  if (!key) {
-    throw new Error(
-      "Missing FAL_API_KEY. Set it in .env.local (see .env.local.example).",
-    );
-  }
-  return key;
+function apiKey(override?: string): string {
+  // Strict BYOK — no env fallback. The user's key must be supplied per call.
+  if (!override) throw new MissingKeyError("fal");
+  return override;
 }
 
 /** Same status surface as BytePlusError so `lib/server-log` and the
@@ -61,12 +58,13 @@ export class FalError extends Error {
 async function falRequest(
   path: string,
   init: RequestInit,
+  keyOverride?: string,
 ): Promise<{ status: number; text: string }> {
   const res = await fetch(`${QUEUE_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Key ${apiKey()}`,
+      Authorization: `Key ${apiKey(keyOverride)}`,
       ...(init.headers ?? {}),
     },
     cache: "no-store",
@@ -119,6 +117,7 @@ export type FalImageParams = {
  */
 export async function generateImageFal(
   params: FalImageParams,
+  apiKey?: string,
 ): Promise<ImageGenResponse> {
   // T2I goes to the base text-to-image endpoint. With at least one
   // reference URL we use the `/edit` sub-endpoint, which takes
@@ -144,13 +143,13 @@ export async function generateImageFal(
   const submitted = await falRequest(path, {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, apiKey);
   const { request_id } = JSON.parse(submitted.text) as { request_id: string };
   if (!request_id) {
     throw new FalError(502, "Bad Gateway", "fal submit returned no request_id");
   }
 
-  const result = await pollForResult(params.model, request_id);
+  const result = await pollForResult(params.model, request_id, apiKey);
   return falToImageGenResponse(result);
 }
 
@@ -175,17 +174,18 @@ type FalResult = {
   image?: { url?: string; width?: number; height?: number };
 };
 
-async function pollForResult(model: string, id: string): Promise<FalResult> {
+async function pollForResult(model: string, id: string, apiKey?: string): Promise<FalResult> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const status = (await falRequest(
       `/${model}/requests/${id}/status`,
       { method: "GET" },
+      apiKey,
     ).then((r) => JSON.parse(r.text) as FalStatus));
     if (status.status === "COMPLETED") {
       const result = await falRequest(`/${model}/requests/${id}`, {
         method: "GET",
-      });
+      }, apiKey);
       return JSON.parse(result.text) as FalResult;
     }
     if (status.status === "FAILED") {

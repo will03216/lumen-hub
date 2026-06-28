@@ -22,11 +22,13 @@ import { videoGenSpec } from "./video-gen-node";
 import { previewSpec } from "./preview-node";
 import { webExtractSpec } from "./web-extract-node";
 import { promptComposerSpec } from "./prompt-composer-node";
+import { promptOptimizerSpec } from "./prompt-optimizer-node";
 import { longVideoSpec } from "./long-video-node";
 import { articleIngesterSpec } from "./article-ingester-node";
 import { articleNarrationSpec } from "./article-narration-node";
 import { musicOverlaySpec } from "./music-overlay-node";
 import { videoStitchSpec } from "./video-stitch-node";
+import { urlInputSpec } from "./url-input-node";
 
 /**
  * The registry is the type-erasure boundary.
@@ -54,11 +56,13 @@ const REGISTRY: Record<NodeTypeId, AnyNodeSpec> = {
   preview: previewSpec,
   webExtract: webExtractSpec,
   promptComposer: promptComposerSpec,
+  promptOptimizer: promptOptimizerSpec,
   longVideo: longVideoSpec,
   articleIngester: articleIngesterSpec,
   articleNarration: articleNarrationSpec,
   musicOverlay: musicOverlaySpec,
   videoStitch: videoStitchSpec,
+  urlInput: urlInputSpec,
 };
 
 export function getNodeSpec(type: string | undefined): AnyNodeSpec | undefined {
