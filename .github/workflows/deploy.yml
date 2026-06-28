@@ -5,13 +5,13 @@ name: Build & Push to BytePlus CR
 #   cd /opt/lumen-hub && ./onbox-update.sh
 #
 # Required repo secrets (Settings → Secrets and variables → Actions → Secrets):
-#   CR_REGISTRY   e.g. lumen-ap-southeast-3.cr.bytepluses.com
-#   CR_USER       e.g. mittul.madaan@78638713
+#   CR_REGISTRY   e.g. your-region.cr.bytepluses.com
+#   CR_USER       e.g. your-cr-username@your-account-id
 #   CR_PASSWORD   the CR access password
 # Required repo variables (Settings → Secrets and variables → Actions → Variables):
-#   CR_IMAGE      e.g. lumen-ap-southeast-3.cr.bytepluses.com/lumen/lumen-hub
+#   CR_IMAGE      e.g. your-region.cr.bytepluses.com/your-namespace/lumen-hub
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY   pk_test_... / pk_live_...
-#   NEXT_PUBLIC_APP_URL                 https://lumen-hub.byteplus-demo.com
+#   NEXT_PUBLIC_APP_URL                 https://your-app-domain.com
 #   NEXT_PUBLIC_CDN_BASE                (optional, blank ok)
 
 on:

@@ -6,9 +6,9 @@
 #
 # Required env (or sourced from deploy/.env.deploy):
 #   ECS_HOST     user@ECS_PUBLIC_IP
-#   REGISTRY     lumen-ap-southeast-3.cr.bytepluses.com/lumen
-#   CR_REGISTRY  lumen-ap-southeast-3.cr.bytepluses.com   (host only, for docker login)
-#   CR_USER      mittul.madaan@78638713
+#   REGISTRY     your-region.cr.bytepluses.com/your-namespace
+#   CR_REGISTRY  your-region.cr.bytepluses.com   (host only, for docker login)
+#   CR_USER      your-cr-username@your-account-id
 #   CR_PASSWORD  <registry access password>
 # Optional:
 #   SSH_KEY      default ~/.ssh/id_rsa

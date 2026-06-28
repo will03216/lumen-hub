@@ -14,80 +14,143 @@ providers. Built on **Next.js 16 + React 19 + Tailwind v4 + Radix**.
 
 ---
 
-## Architecture overview
+## What you'll need
 
-Lumen is a single Next.js app that serves the UI and a set of server-side API
-routes proxying the model providers. It depends on three things at runtime:
+| Requirement | Why | Cost |
+|-------------|-----|------|
+| **Node.js 20+** | Runs the Next.js app | Free |
+| **Docker** (or any PostgreSQL 15+) | Stores your account, encrypted API keys, Studio canvases | Free (self-hosted) |
+| **A Clerk account** ([clerk.com](https://clerk.com)) | Authentication / accounts | Free tier |
+| **A BytePlus / Ark API key** ([console.byteplus.com](https://console.byteplus.com)) | The AI models (Seedream images, Seedance video) | BytePlus usage-billed |
 
-| Dependency | Role | Required? |
-|------------|------|-----------|
-| **PostgreSQL** | Stores users, encrypted per-user API keys, Studio canvases, library metadata | ✅ (for auth/persistence; optional for pure local dev — see below) |
-| **Clerk** ([clerk.com](https://clerk.com)) | Authentication | ✅ |
-| **AI provider keys** | Image/video generation | ⚙️ Per-user (BYOK), not server-wide |
-
-> **Strict BYOK (bring-your-own-key).** Provider credentials are **not** set as
-> server env vars. Each signed-in user enters their own keys in **Settings**;
-> they're encrypted with `KEY_ENCRYPTION_SECRET` and stored per-user in the DB.
-> There is **no env fallback** — if a required key is missing, the API returns
-> `402 missing_api_key` pointing the user to `/settings`
-> (see `lib/server/user-keys.ts`).
-
-For a full breakdown of routes, workflows, and the storage/service layers, see
-[`ARCHITECTURE.md`](ARCHITECTURE.md).
+> **Bring-your-own-key (BYOK).** Provider API keys are **not** put in a config
+> file. Each signed-in user pastes their own keys into the in-app **Settings**
+> page, where they're encrypted per-user (with `KEY_ENCRYPTION_SECRET`) in the
+> database. There is **no env fallback** — a missing key returns
+> `402 missing_api_key` pointing to `/settings` (see `lib/server/user-keys.ts`).
+> MiniMax and fal.ai are optional; only BytePlus is required.
 
 ---
 
-## Quick start (local development)
+## Local setup
 
-Requires **Node.js 20+**.
+### 1. Clone and install
 
 ```bash
-# 1. Install dependencies
+git clone <repo-url> lumen-hub
+cd lumen-hub
 npm install
+```
 
-# 2. Configure environment
+### 2. Start a local PostgreSQL
+
+The repo ships a Compose file with a pre-configured Postgres that **auto-loads
+the database schema** on first boot. Start just the database:
+
+```bash
+docker compose -f docker-compose.local.yml up -d postgres
+```
+
+It's reachable at `postgres://lumenhub:lumenhub@localhost:5433/lumenhub`
+(host port **5433** → container 5432; data persists in a Docker volume).
+
+<details>
+<summary>Prefer your own PostgreSQL instead of Docker?</summary>
+
+```bash
+createdb lumenhub
+psql "postgres://USER:PASS@localhost:5432/lumenhub" -f supabase/pg-schema.sql
+```
+
+Use that connection string as your `DATABASE_URL` in step 4.
+</details>
+
+### 3. Set up Clerk (one-time, ~5 minutes)
+
+Sign-in and onboarding won't work without this.
+
+1. Create a free account and a new **Application** at
+   [dashboard.clerk.com](https://dashboard.clerk.com).
+2. From **API Keys**, copy the publishable key (`pk_test_…`) and secret key
+   (`sk_test_…`).
+3. **Customize the session token** (required — the app reads custom claims). Go
+   to **Configure → Sessions → Customize session token** and add:
+   ```json
+   {
+     "metadata": "{{user.public_metadata}}",
+     "email": "{{user.primary_email_address}}"
+   }
+   ```
+   - Without `metadata`, new users get stuck looping on `/settings`.
+   - `email` is only needed if you enable the access allowlist (see below).
+
+### 4. Configure environment variables
+
+```bash
 cp .env.local.example .env.local
-#    Then edit .env.local — at minimum set the Clerk keys and KEY_ENCRYPTION_SECRET.
-#    Generate the secret with:  openssl rand -hex 32
+```
 
-# 3. Run the dev server
+Edit `.env.local` so it contains at least:
+
+```dotenv
+# Clerk (from step 3)
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxxxx
+CLERK_SECRET_KEY=sk_test_xxxxx
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/onboarding
+NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/onboarding
+NEXT_PUBLIC_CLERK_AFTER_SIGN_OUT_URL=/sign-in
+
+# Database (from step 2)
+DATABASE_URL=postgres://lumenhub:lumenhub@localhost:5433/lumenhub
+
+# Encrypts your stored API keys — generate with: openssl rand -hex 32
+KEY_ENCRYPTION_SECRET=paste-32-byte-hex-here
+```
+
+Generate the encryption secret with `openssl rand -hex 32`.
+
+> **Don't** put `BYTEPLUS_API_KEY` here — the app ignores env-level provider keys
+> (strict BYOK). You'll add it in the app in step 6. The leftover line in the
+> template is harmless.
+
+### 5. Run
+
+```bash
 npm run dev
 ```
 
-Open <http://localhost:3000>.
+Open **http://localhost:3000** (if the port is taken, the terminal prints the
+actual one, e.g. 3001).
 
-You'll be routed through Clerk sign-in, then **Settings**, where you paste your
-own BytePlus (and optionally MiniMax / fal.ai) keys to start generating.
+### 6. First run — create an account and add your BytePlus key
 
-> **One-time Clerk setup is required** for sign-in and onboarding to work
-> (custom session token claims). See
-> [`CUSTOMER_DEPLOY.md` §3](CUSTOMER_DEPLOY.md) for the exact steps.
+1. You'll be redirected to Clerk **sign-up**. Create an account.
+2. After signing in you land on **Settings** (the app forces key setup first).
+3. Paste your **BytePlus / Ark API key** (from
+   [console.byteplus.com](https://console.byteplus.com)). Optionally add MiniMax
+   or fal.ai keys for those extra models.
+4. Save — the studio unlocks. Try a prompt in the Image or Video generator.
 
-### Running with Docker (app + database, one command)
-
-To run a self-contained stack (app **and** a bundled PostgreSQL) without
-installing Node or a DB locally:
+### Verify it's working
 
 ```bash
-cp .env.local.example .env        # set Clerk keys + KEY_ENCRYPTION_SECRET
-docker compose -f docker-compose.local.yml up --build
+curl http://localhost:3000/api/health     # → {"status":"ok", ...}
 ```
-
-Details, production deployment, and the full env reference are in
-[`CUSTOMER_DEPLOY.md`](CUSTOMER_DEPLOY.md).
 
 ---
 
 ## Environment variables
 
 The authoritative templates are [`.env.local.example`](.env.local.example) and
-[`.env.production.example`](.env.production.example). Summary:
+[`.env.production.example`](.env.production.example).
 
 ### Platform configuration (set by the operator)
 
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk publishable key (`pk_live_…`/`pk_test_…`). Baked in at build time. |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk publishable key. Baked in at build time. |
 | `CLERK_SECRET_KEY` | ✅ | Clerk secret key. |
 | `KEY_ENCRYPTION_SECRET` | ✅ | 32-byte hex; encrypts stored user keys. `openssl rand -hex 32`. |
 | `DATABASE_URL` | ✅¹ | PostgreSQL connection string. |
@@ -104,12 +167,12 @@ the app runs in a degraded local-only mode (no persisted user keys).
 
 ### Provider keys — entered per-user in Settings, NOT as env vars
 
-| Provider | Enables |
-|----------|---------|
-| BytePlus / Ark | Seedream (image), Seedance (video), Seed models — the core experience |
-| ModelArk AK/SK + TOS bucket | Cloud asset Library sync |
-| MiniMax | Hailuo / T2V-01-Director video models (optional) |
-| fal.ai | GPT Image 2 and other fal-hosted models (optional) |
+| Provider | Enables | Required? |
+|----------|---------|-----------|
+| BytePlus / Ark | Seedream (image), Seedance (video), Seed models | ✅ Yes |
+| ModelArk AK/SK + TOS bucket | Cloud asset Library sync | Optional |
+| MiniMax | Hailuo / T2V-01-Director video models | Optional |
+| fal.ai | GPT Image 2 and other fal-hosted models | Optional |
 
 ### BytePlus model overrides (optional)
 
@@ -134,45 +197,73 @@ dated version (`<model>-YYMMDD`) and override via env.
 
 ---
 
+## Optional: restrict who can sign in
+
+By default, anyone who creates a Clerk account can use your instance. To limit it,
+set either of these in `.env.local` (read at runtime — just restart `npm run dev`):
+
+```dotenv
+ALLOWED_EMAIL_DOMAINS=yourcompany.com
+ALLOWED_EMAILS=alice@gmail.com,bob@outlook.com
+```
+
+When either is set, only matching emails get in; everyone else is sent to
+`/not-authorized`. Requires the `email` claim from the Clerk session token (step 3).
+
+---
+
+## Useful commands
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Start the dev server (hot reload) |
+| `npm run build` | Production build (standalone output) |
+| `npm run start` | Run the production build |
+| `npm run test` | Run the test suite (Vitest) |
+| `npm run reels:render` | Render reels via `scripts/reels-render.ts` |
+| `docker compose -f docker-compose.local.yml up -d postgres` | Start the local database |
+| `docker compose -f docker-compose.local.yml down` | Stop the database (keeps data) |
+| `docker compose -f docker-compose.local.yml down -v` | Stop the database and **delete** its data |
+
+---
+
 ## How it works
 
 - `app/api/image/route.ts` proxies image generation (synchronous).
 - `app/api/video/route.ts` submits a video task and returns a task id;
   `app/api/video/[id]/route.ts` polls it.
 - Video parameter shape depends on the model — `lib/byteplus.ts` (`isSeedance2`)
-  branches automatically:
-  - **Seedance 1.5 Pro** — flags inline in the prompt text
-    (`prompt --resolution 1080p --duration 5 --ratio 16:9`).
-  - **Seedance 2.0 / 2.0 Fast** — clean prompt; `resolution`, `duration`,
-    `ratio`, `seed`, `camerafixed`, `generate_audio` ride at the top level of the
-    request body.
+  branches automatically: **Seedance 1.5 Pro** puts flags inline in the prompt
+  text (`prompt --resolution 1080p --duration 5 --ratio 16:9`); **Seedance 2.0 /
+  2.0 Fast** use a clean prompt with `resolution`, `duration`, `ratio`, `seed`,
+  `camerafixed`, `generate_audio` at the top level of the request body.
 - Provider keys are resolved per request from the calling user's stored keys
   (`lib/server/user-keys.ts`) and **never leave the server**.
-
-### Image-to-video input
-
-`FrameUpload` reads files as base64 data URLs and sends them to the provider. If
-data URLs are rejected for your region/model, host the image on a public URL and
-paste that instead — `lib/byteplus.ts` accepts both.
+- `FrameUpload` reads image-to-video frames as base64 data URLs. If your
+  region/model rejects data URLs, host the image on a public URL and paste that
+  instead — `lib/byteplus.ts` accepts both.
 
 ---
 
-## Scripts
+## Troubleshooting
 
-| Command | Purpose |
-|---------|---------|
-| `npm run dev` | Start the dev server |
-| `npm run build` | Production build (standalone output) |
-| `npm run start` | Run the production build |
-| `npm run test` | Run the Vitest suite |
-| `npm run reels:render` | Render reels via `scripts/reels-render.ts` |
+| Symptom | Fix |
+|---------|-----|
+| Redirect loop on `/settings` after login | Clerk session token missing the `metadata` claim (step 3). |
+| Sign-in page errors / blank | Wrong `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY`. |
+| App loads but DB errors | Postgres not running, wrong `DATABASE_URL`, or schema not loaded (step 2). |
+| "No BytePlus API key found" (402) | Add your key in **Settings** (step 6) — it's per-user, not an env var. |
+| Model call returns 404 | The dated model ID changed; override `BYTEPLUS_VIDEO_MODEL` / `BYTEPLUS_IMAGE_MODEL` in `.env.local`. |
+| Port 3000 already in use | Next.js auto-picks the next free port; check the terminal output. |
 
 ---
 
-## Deployment
+## Deploying to production
 
 This app is built for **Docker** (standalone Next.js output, runs `node
 server.js` on port 3000, with a `/api/health` check). Full instructions —
 self-contained stack, production rollout, Clerk setup, schema loading, TLS,
 backups, and a go-live checklist — are in
 [**`CUSTOMER_DEPLOY.md`**](CUSTOMER_DEPLOY.md).
+
+For an architecture deep-dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
