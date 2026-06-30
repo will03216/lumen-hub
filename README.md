@@ -124,14 +124,50 @@ npm run dev
 Open **http://localhost:3000** (if the port is taken, the terminal prints the
 actual one, e.g. 3001).
 
+<details>
+<summary>Alternative: run <strong>everything</strong> in Docker (app + database)</summary>
+
+`docker-compose.local.yml` also defines an **`app`** service that builds from the
+`Dockerfile`, so you can run the whole stack in containers instead of
+`npm run dev`. Compose reads a root **`.env`** file (not `.env.local`) for
+variable substitution, and the app container reaches Postgres internally at
+`postgres:5432` (so `DATABASE_URL` is set automatically inside the container).
+
+1. Create a root `.env` with the build/runtime values:
+   ```dotenv
+   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxxxx
+   CLERK_SECRET_KEY=sk_test_xxxxx
+   KEY_ENCRYPTION_SECRET=<openssl rand -hex 32>
+   NEXT_PUBLIC_APP_URL=http://localhost:3000
+   ```
+2. Build and start both services:
+   ```bash
+   docker compose -f docker-compose.local.yml up -d --build
+   ```
+3. App on http://localhost:3000, Postgres on `:5433`. Rebuild after code changes
+   with the same `up -d --build`. Logs: `docker compose -f docker-compose.local.yml logs -f app`.
+
+> `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is baked in at **build time**, so changing
+> it requires a rebuild. Behind a TLS-intercepting corporate proxy, `npm ci` in
+> the build may fail with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` — see Troubleshooting.
+
+</details>
+
 ### 6. First run — create an account and add your BytePlus key
 
 1. You'll be redirected to Clerk **sign-up**. Create an account.
 2. After signing in you land on **Settings** (the app forces key setup first).
 3. Paste your **BytePlus / Ark API key** (from
    [console.byteplus.com](https://console.byteplus.com)). Optionally add MiniMax
-   or fal.ai keys for those extra models.
+   (also required for the **Audio / TTS** tab) or fal.ai keys for those extra
+   models.
 4. Save — the studio unlocks. Try a prompt in the Image or Video generator.
+
+> To use **Video Stitch, Music Overlay, or Article Narration**, also add your
+> BytePlus **Access Key (`AKLT…`)**, **Secret Key**, and **TOS bucket** in
+> Settings — those nodes upload the rendered file to TOS and will fail with a
+> `402 missing_api_key` (or a TOS `InvalidAccessKeyId`) without them. See
+> [Provider keys](#provider-keys--entered-per-user-in-settings-not-as-env-vars).
 
 ### Verify it's working
 
@@ -170,9 +206,17 @@ the app runs in a degraded local-only mode (no persisted user keys).
 | Provider | Enables | Required? |
 |----------|---------|-----------|
 | BytePlus / Ark | Seedream (image), Seedance (video), Seed models | ✅ Yes |
-| ModelArk AK/SK + TOS bucket | Cloud asset Library sync | Optional |
-| MiniMax | Hailuo / T2V-01-Director video models | Optional |
+| BytePlus **Access Key + Secret Key** + TOS bucket | Cloud asset Library sync **and** any node that uploads a rendered file: **Video Stitch, Music Overlay, Article Narration** | Required for those nodes |
+| MiniMax | Hailuo / T2V-01-Director video models, TTS / Audio | Optional |
 | fal.ai | GPT Image 2 and other fal-hosted models | Optional |
+
+> **The Access Key must be a *permanent* IAM key (prefix `AKLT…`), not a
+> temporary/STS key (prefix `AKTP…`).** STS keys expire and require a session
+> token the app does not send — TOS will reject them with
+> `InvalidAccessKeyId … does not exist in our records`. The bucket needs a
+> **public-read** policy so ModelArk can fetch the uploaded file. Create the key
+> under **BytePlus console → IAM → Access Keys**; it is separate from the
+> `ark-…` ModelArk API key used for image/video generation.
 
 ### BytePlus model overrides (optional)
 
@@ -194,6 +238,25 @@ the app runs in a degraded local-only mode (no persisted user keys).
 
 If a default model ID returns 404, check your BytePlus console for the exact
 dated version (`<model>-YYMMDD`) and override via env.
+
+### TOS / ModelArk storage config (optional env overrides)
+
+The Access Key, Secret Key, and bucket name are entered **per-user in Settings**
+(not env). These vars only configure the *endpoint and signing*, and are read at
+runtime from the operator's environment:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MODELARK_HOST` | `open.byteplusapi.com` | ModelArk API host. |
+| `MODELARK_REGION` | `ap-southeast-1` | Region used to build the TOS endpoint host (`{bucket}.tos-{region}.bytepluses.com`). |
+| `MODELARK_TOS_REGION` | `cn-beijing` | Region used to **sign** the TOS request (SigV4 credential scope). |
+| `MODELARK_TOS_HOST` | `tos-{MODELARK_REGION}.bytepluses.com` | Overrides the full TOS host. |
+
+> ⚠️ **Region mismatch caveat.** The defaults sign with `cn-beijing` but build
+> the endpoint for `ap-southeast-1`. If your bucket is in `ap-southeast-1`
+> (the common overseas case), set **`MODELARK_TOS_REGION=ap-southeast-1`** so the
+> signing region matches the bucket region — otherwise TOS uploads fail with
+> `SignatureDoesNotMatch` even with a valid key.
 
 ---
 
@@ -253,8 +316,12 @@ When either is set, only matching emails get in; everyone else is sent to
 | Sign-in page errors / blank | Wrong `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY`. |
 | App loads but DB errors | Postgres not running, wrong `DATABASE_URL`, or schema not loaded (step 2). |
 | "No BytePlus API key found" (402) | Add your key in **Settings** (step 6) — it's per-user, not an env var. |
+| TOS `InvalidAccessKeyId … does not exist` on Stitch / Overlay / Narration | The Access Key in Settings is invalid or a temporary `AKTP…` key. Use a permanent `AKLT…` IAM key (see [Provider keys](#provider-keys--entered-per-user-in-settings-not-as-env-vars)). |
+| TOS `SignatureDoesNotMatch` with a valid key | Signing region ≠ bucket region. Set `MODELARK_TOS_REGION` to your bucket's region (e.g. `ap-southeast-1`). |
 | Model call returns 404 | The dated model ID changed; override `BYTEPLUS_VIDEO_MODEL` / `BYTEPLUS_IMAGE_MODEL` in `.env.local`. |
 | Port 3000 already in use | Next.js auto-picks the next free port; check the terminal output. |
+| Docker build fails at `npm ci` with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | A TLS-intercepting proxy (e.g. corporate Docker Desktop proxy) the build container doesn't trust. Either add the proxy's CA to the build, or disable strict TLS for the `deps` stage only (integrity is still enforced by `package-lock.json` hashes). |
+| App container shows `unhealthy` but works from the host | Healthcheck must hit `127.0.0.1`, not `localhost` — inside Alpine `localhost` resolves to IPv6 `::1` while the server binds IPv4. (Already fixed in the shipped compose files.) |
 
 ---
 
