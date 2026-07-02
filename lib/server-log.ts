@@ -30,6 +30,8 @@ export type RouteTag =
   | "story.generate-shots"
   | "compose-prompt"
   | "video.stitch"
+  | "video.enhance"
+  | "video.enhance.poll"
   | "article-to-prompt"
   | "optimize-prompt";
 

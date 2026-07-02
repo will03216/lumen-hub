@@ -9,6 +9,9 @@ export type UserKeys = {
   byteplusAk?: string
   bytelusSk?: string
   byteplusTosBucket?: string
+  /** AI MediaKit API Key — Bearer token for the enhance-video tool. Separate
+   *  from the ark key and the AK/SK pair. */
+  byteplusMediakitKey?: string
   fal?: string
   minimax?: string
   minimaxGroupId?: string
@@ -48,6 +51,7 @@ export async function getUserKeys(): Promise<UserKeys> {
           case 'byteplus_ak':      keys.byteplusAk = plain;     break
           case 'byteplus_sk':      keys.bytelusSk = plain;      break
           case 'byteplus_tos_bucket': keys.byteplusTosBucket = plain; break
+          case 'byteplus_mediakit_key': keys.byteplusMediakitKey = plain; break
           case 'fal':              keys.fal = plain;             break
           case 'minimax':          keys.minimax = plain;         break
           case 'minimax_group_id': keys.minimaxGroupId = plain;  break

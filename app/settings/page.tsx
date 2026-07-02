@@ -6,10 +6,11 @@ import { useAuth } from '@clerk/nextjs'
 import Link from 'next/link'
 
 const FIELD_TO_PROVIDER = {
-  byteplusApiKey:    'byteplus',
-  byteplusAk:        'byteplus_ak',
-  bytelusSk:         'byteplus_sk',
-  byteplusTosBucket: 'byteplus_tos_bucket',
+  byteplusApiKey:     'byteplus',
+  byteplusAk:         'byteplus_ak',
+  bytelusSk:          'byteplus_sk',
+  byteplusTosBucket:  'byteplus_tos_bucket',
+  byteplusMediakitKey: 'byteplus_mediakit_key',
 } as const
 
 type FieldId = keyof typeof FIELD_TO_PROVIDER
@@ -49,6 +50,12 @@ const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[
     placeholder: 'my-bucket',
     hint: 'console.byteplus.com → TOS → Buckets (public-read, your own bucket)',
   },
+  {
+    id: 'byteplusMediakitKey',
+    label: 'AI MediaKit API Key (optional)',
+    placeholder: 'mk-...',
+    hint: 'console.byteplus.com → AI MediaKit → API Keys. Enables the Upscale & Enhance node.',
+  },
 ]
 
 type Hints = Partial<Record<Provider, string | null>>
@@ -70,11 +77,11 @@ function SettingsForm() {
   const isSetup = searchParams.get('setup') === '1'
 
   const [values, setValues] = useState<Record<FieldId, string>>({
-    byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '',
+    byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '',
   })
   const [hints, setHints] = useState<Hints>({})
   const [visible, setVisible] = useState<Record<FieldId, boolean>>({
-    byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false,
+    byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false, byteplusMediakitKey: false,
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Provider | null>(null)
@@ -141,7 +148,7 @@ function SettingsForm() {
         showToast('error', error ?? 'Failed to save keys.')
         return
       }
-      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '' })
+      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '' })
       const fresh = await loadHints()
       if (isSetup) {
         if (allRequiredSaved(fresh)) { await enterApp(); return }

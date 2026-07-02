@@ -14,7 +14,7 @@ import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
 
-const VALID_PROVIDERS = ['byteplus', 'byteplus_ak', 'byteplus_sk', 'byteplus_tos_bucket', 'fal', 'minimax', 'minimax_group_id'] as const
+const VALID_PROVIDERS = ['byteplus', 'byteplus_ak', 'byteplus_sk', 'byteplus_tos_bucket', 'byteplus_mediakit_key', 'fal', 'minimax', 'minimax_group_id'] as const
 
 /** Keys a user must have saved before they can use the app (strict BYOK). */
 const REQUIRED_PROVIDERS = ['byteplus', 'byteplus_ak', 'byteplus_sk', 'byteplus_tos_bucket'] as const
