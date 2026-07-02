@@ -28,6 +28,7 @@ import { articleIngesterSpec } from "./article-ingester-node";
 import { articleNarrationSpec } from "./article-narration-node";
 import { musicOverlaySpec } from "./music-overlay-node";
 import { videoStitchSpec } from "./video-stitch-node";
+import { videoUpscaleSpec } from "./video-upscale-node";
 import { urlInputSpec } from "./url-input-node";
 
 /**
@@ -62,6 +63,7 @@ const REGISTRY: Record<NodeTypeId, AnyNodeSpec> = {
   articleNarration: articleNarrationSpec,
   musicOverlay: musicOverlaySpec,
   videoStitch: videoStitchSpec,
+  videoUpscale: videoUpscaleSpec,
   urlInput: urlInputSpec,
 };
 
