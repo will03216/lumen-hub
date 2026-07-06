@@ -638,7 +638,10 @@ export type VideoParams = {
   // VideoParams envelope without a separate type. BytePlus models don't
   // accept 768p — the byteplus.ts adapter ignores it; the minimax.ts
   // adapter rewrites to "768P".
-  resolution?: "480p" | "720p" | "768p" | "1080p";
+  // "4k" is Seedance 2.0 (standard) only; passed straight through as the
+  // top-level `resolution` for the 2.0 family. Other models gate it out
+  // upstream via their caps, so it never reaches an engine that rejects it.
+  resolution?: "480p" | "720p" | "768p" | "1080p" | "4k";
   // 1.5 Pro: 5 | 10. Seedance 2.0: any integer 4-15. -1 = auto (2.0 only).
   duration?: number;
   ratio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "adaptive";

@@ -268,7 +268,10 @@ export function imageModeLabel(refCount: number, maxImages: number): string {
 // 768p was added when Minimax's Hailuo line came in (§62) — Hailuo 2.3
 // accepts 768P / 1080P only. BytePlus models still cap at 1080p; the
 // extra value is harmless on dropdowns they don't gate to.
-export type VideoResolution = "480p" | "720p" | "768p" | "1080p";
+// "4k" is Seedance 2.0 (standard) only — verified against the live API:
+// 2.0-standard accepts 480p/720p/1080p/4k, while 2.0-Fast and 1.5-Pro reject
+// 4k, and every Seedance model rejects "2k". See CAPS_V20_STD below.
+export type VideoResolution = "480p" | "720p" | "768p" | "1080p" | "4k";
 export type VideoRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9";
 
 export type VideoCaps = {
@@ -294,8 +297,21 @@ export type VideoModel = {
   provider?: VideoProvider;
 };
 
+// Seedance 2.0 Fast. NOTE: the live API also rejected 1080p for the Fast
+// model in t2v (only 720p passed) — an anomaly vs. this cap list that we're
+// intentionally leaving alone for now; to be investigated separately.
 const CAPS_V20: VideoCaps = {
   resolutions: ["480p", "720p", "1080p"],
+  durations: [4, 5, 6, 8, 10, 12, 15],
+  audio: true,
+  referenceMode: true,
+};
+
+// Seedance 2.0 standard — same as Fast plus 4k output (verified: submits and
+// renders a real 4k video). 4k is far slower and uses vastly more tokens, so
+// it's opt-in per render, not a default.
+const CAPS_V20_STD: VideoCaps = {
+  resolutions: ["480p", "720p", "1080p", "4k"],
   durations: [4, 5, 6, 8, 10, 12, 15],
   audio: true,
   referenceMode: true,
@@ -330,8 +346,8 @@ export const VIDEO_MODELS: readonly VideoModel[] = [
   {
     id: "dreamina-seedance-2-0-260128",
     label: "Seedance 2.0",
-    hint: "Native audio · up to 1080p · 4–15s",
-    caps: CAPS_V20,
+    hint: "Native audio · up to 4K · 4–15s",
+    caps: CAPS_V20_STD,
   },
   {
     id: "dreamina-seedance-2-0-fast-260128",
