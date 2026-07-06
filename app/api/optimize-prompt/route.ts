@@ -31,10 +31,27 @@ type OptimizeBody = {
   customOutputLanguage?: string;
 };
 
-/** Thinking budget — gives the model room to actually run the pipeline +
- *  integrity check instead of one-shotting. max_tokens must exceed this. */
+/** Legacy thinking budget — only used by pre-adaptive models (Haiku 4.5 and
+ *  older), which still take `thinking: {type:"enabled", budget_tokens}`. Must
+ *  be < max_tokens. Adaptive-thinking models (Opus 4.6+, Sonnet 4.6) ignore it
+ *  and control depth via `output_config.effort` instead — see `thinkingParams`. */
 const THINKING_BUDGET = 4000;
 const MAX_TOKENS = 8000;
+
+/** Opus 4.6+, Sonnet 4.6, and Fable/Mythos 5 REQUIRE adaptive thinking —
+ *  `thinking:{type:"enabled", budget_tokens}` returns a 400 on Opus 4.7/4.8.
+ *  Older models (Haiku 4.5, Sonnet 4.5, …) still use the enabled+budget form
+ *  and reject `effort`. */
+function usesAdaptiveThinking(model: string): boolean {
+  return /opus-4-(6|7|8)|sonnet-4-6|fable-5|mythos-5/.test(model);
+}
+
+/** Model-aware thinking params to merge into messages.create. */
+function thinkingParams(model: string): Record<string, unknown> {
+  return usesAdaptiveThinking(model)
+    ? { thinking: { type: "adaptive" }, output_config: { effort: "high" } }
+    : { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET } };
+}
 
 function resolveLanguageInstruction(outputLanguage = "match", customOutputLanguage = ""): string {
   if (outputLanguage === "en") return "Write the optimized prompt in English.";
@@ -153,7 +170,7 @@ export async function POST(req: NextRequest) {
     const message = await client.messages.create({
       model,
       max_tokens: MAX_TOKENS,
-      thinking: { type: "enabled", budget_tokens: THINKING_BUDGET },
+      ...thinkingParams(model),
       system,
       messages: [
         {
@@ -168,7 +185,7 @@ export async function POST(req: NextRequest) {
           ),
         },
       ],
-    });
+    } as Anthropic.MessageCreateParamsNonStreaming);
 
     // With thinking enabled the response leads with thinking blocks — take the
     // first text block, not content[0].

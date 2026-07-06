@@ -9,10 +9,26 @@ import { assertSafeUrl } from "@/lib/server/url-guard";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/** Thinking budget — lets the model run the skill's pipeline + integrity check
- *  before emitting the shot JSON. max_tokens must exceed this. */
+/** Legacy thinking budget — only used by pre-adaptive models (Haiku 4.5 and
+ *  older). Adaptive-thinking models (Opus 4.6+, Sonnet 4.6) reject the
+ *  enabled+budget_tokens form with a 400 and use `output_config.effort`
+ *  instead — see `thinkingParams`. Must be < max_tokens. */
 const THINKING_BUDGET = 4000;
 const MAX_TOKENS = 8000;
+
+/** Opus 4.6+, Sonnet 4.6, and Fable/Mythos 5 REQUIRE adaptive thinking —
+ *  `thinking:{type:"enabled", budget_tokens}` returns a 400 on Opus 4.7/4.8.
+ *  Older models still use enabled+budget and reject `effort`. */
+function usesAdaptiveThinking(model: string): boolean {
+  return /opus-4-(6|7|8)|sonnet-4-6|fable-5|mythos-5/.test(model);
+}
+
+/** Model-aware thinking params to merge into messages.create. */
+function thinkingParams(model: string): Record<string, unknown> {
+  return usesAdaptiveThinking(model)
+    ? { thinking: { type: "adaptive" }, output_config: { effort: "high" } }
+    : { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET } };
+}
 
 type IngestBody = {
   articleText?: string;
@@ -125,12 +141,12 @@ export async function POST(req: NextRequest) {
     const message = await client.messages.create({
       model,
       max_tokens: MAX_TOKENS,
-      thinking: { type: "enabled", budget_tokens: THINKING_BUDGET },
+      ...thinkingParams(model),
       system,
       messages: [
         { role: "user", content: buildUserMessage(content, shotCount, shotDuration, body.outputLanguage, body.customOutputLanguage) },
       ],
-    });
+    } as Anthropic.MessageCreateParamsNonStreaming);
 
     // With thinking enabled the response leads with thinking blocks — take the
     // first text block, not content[0].
