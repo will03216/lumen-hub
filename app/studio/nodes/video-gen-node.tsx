@@ -8,6 +8,7 @@ import {
   VIDEO_RATIOS,
   DEFAULT_VIDEO_MODEL_ID,
   findVideoModel,
+  type VideoResolution,
 } from "@/lib/studio/models";
 import { stageGeneratedVideo } from "@/lib/library/auto-save";
 import { NodeShell } from "./node-shell";
@@ -228,7 +229,7 @@ export const VideoGenNode = memo(function VideoGenNode({
             update({
               model: next,
               resolution: cap?.resolutions.includes(
-                d.form.resolution as "480p" | "720p" | "768p" | "1080p",
+                d.form.resolution as VideoResolution,
               )
                 ? d.form.resolution
                 : (cap?.resolutions[0] ?? "720p"),
@@ -289,6 +290,12 @@ export const VideoGenNode = memo(function VideoGenNode({
           </select>
         </Field>
       </div>
+
+      {d.form.resolution === "4k" && (
+        <p className="font-mono text-[9px] leading-[1.5] text-amber-400/80">
+          ⚠ 4K is much slower and uses far more tokens than 1080p.
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         <Field label="Seed">
