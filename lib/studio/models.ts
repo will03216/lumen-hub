@@ -297,11 +297,12 @@ export type VideoModel = {
   provider?: VideoProvider;
 };
 
-// Seedance 2.0 Fast. NOTE: the live API also rejected 1080p for the Fast
-// model in t2v (only 720p passed) — an anomaly vs. this cap list that we're
-// intentionally leaving alone for now; to be investigated separately.
-const CAPS_V20: VideoCaps = {
-  resolutions: ["480p", "720p", "1080p"],
+// Seedance 2.0 Fast — caps at 720p. Verified against the live API: 480p and
+// 720p are accepted, 1080p is rejected in BOTH t2v and i2v ("resolution not
+// valid for model dreamina-seedance-2-0-fast"). The standard 2.0 model does
+// accept 1080p (and 4k), so this is a genuine Fast-only ceiling, not a bug.
+const CAPS_V20_FAST: VideoCaps = {
+  resolutions: ["480p", "720p"],
   durations: [4, 5, 6, 8, 10, 12, 15],
   audio: true,
   referenceMode: true,
@@ -352,8 +353,8 @@ export const VIDEO_MODELS: readonly VideoModel[] = [
   {
     id: "dreamina-seedance-2-0-fast-260128",
     label: "Seedance 2.0 Fast",
-    hint: "~25% cheaper · faster queue · up to 1080p",
-    caps: CAPS_V20,
+    hint: "~25% cheaper · faster queue · up to 720p",
+    caps: CAPS_V20_FAST,
   },
   {
     id: "seedance-1-5-pro-251215",
@@ -416,8 +417,8 @@ export function intersectVideoCaps(
   aId: string,
   bId: string,
 ): VideoCaps {
-  const a = findVideoModel(aId)?.caps ?? CAPS_V20;
-  const b = findVideoModel(bId)?.caps ?? CAPS_V20;
+  const a = findVideoModel(aId)?.caps ?? CAPS_V20_STD;
+  const b = findVideoModel(bId)?.caps ?? CAPS_V20_STD;
   return {
     resolutions: a.resolutions.filter((r) => b.resolutions.includes(r)),
     durations: a.durations.filter((d) => b.durations.includes(d)),
