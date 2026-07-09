@@ -309,12 +309,270 @@ const articleNarration: StudioTemplate = {
   },
 };
 
+const referenceCreativePackage: StudioTemplate = {
+  id: "reference-creative-package",
+  name: "Reference Creative Package",
+  description:
+    "Extract a reference beauty URL, apply its creative direction to your product image, then expand the hero into static and short-video variants.",
+  badge: "REF→PKG",
+  order: 6,
+  build: (): CanvasShape => {
+    const heroPrompt = newId("tp-hero");
+    const squarePrompt = newId("tp-square");
+    const verticalPrompt = newId("tp-vertical");
+    const videoPrompt = newId("tp-video");
+    const we = newId("we");
+    const ap = newId("ap");
+    const videoStyle = newId("vse");
+    const st = newId("st");
+    const heroPv = newId("pv-hero");
+    const square = newId("square");
+    const vertical = newId("vertical");
+    const video = newId("video");
+    const squarePv = newId("pv-square");
+    const verticalPv = newId("pv-vertical");
+    const videoPv = newId("pv-video");
+
+    const heroPosterPrompt =
+      "Create a clean premium beauty hero poster for the product shown in the content image. Use the style image only as creative direction: glossy lip texture, soft studio lighting, minimal white background, refined skincare-beauty aesthetic, and elegant product composition. Keep the content product recognizable. Do not copy reference logos, packaging text, exact layout, or brand identity. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
+    const squarePosterPrompt =
+      "Create a square poster variant from the hero poster reference. Keep the same product, glossy beauty mood, white studio background, and refined premium composition, but make a fresh balanced 1:1 layout with slight product repositioning, clean negative space, and polished cosmetic campaign styling. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
+    const verticalPosterPrompt =
+      "Create a vertical story poster from the hero poster reference. Keep the same product and premium beauty aesthetic, but redesign it for a 9:16 mobile story composition with taller framing, elegant product reveal, glossy pink texture detail, soft light shimmer, and clean white space. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
+    const videoMotionPrompt =
+      "Create a poster-style product video from the hero poster reference. Keep the same product, white studio background, glossy pink lip texture, and premium beauty aesthetic. Add subtle camera push-in, soft light shimmer, gentle gloss movement, and refined product reveal motion. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
+
+    return {
+      nodes: [
+        {
+          id: heroPrompt,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: { form: textForm(heroPosterPrompt) },
+        },
+        {
+          id: squarePrompt,
+          type: "textPrompt",
+          position: POS(520, -220),
+          data: { form: textForm(squarePosterPrompt) },
+        },
+        {
+          id: verticalPrompt,
+          type: "textPrompt",
+          position: POS(520, 620),
+          data: { form: textForm(verticalPosterPrompt) },
+        },
+        {
+          id: videoPrompt,
+          type: "textPrompt",
+          position: POS(520, 940),
+          data: { form: textForm(videoMotionPrompt) },
+        },
+        {
+          id: videoStyle,
+          type: "videoStyleExtract",
+          position: POS(520, 1220),
+          data: {
+            form: {
+              videoUrl: "",
+              productContext: "N°7 glossy pink lipstick",
+            },
+          },
+        },
+        {
+          id: we,
+          type: "webExtract",
+          position: POS(0, 280),
+          data: { form: {} },
+        },
+        {
+          id: ap,
+          type: "asset",
+          position: POS(0, 880),
+          data: { form: {} },
+        },
+        {
+          id: st,
+          type: "styleTransfer",
+          position: POS(520, 320),
+          data: {
+            form: {
+              model: "seedream-4-5-251128",
+              size: "2048x2048",
+              seed: "",
+            },
+          },
+        },
+        {
+          id: heroPv,
+          type: "preview",
+          position: POS(920, 220),
+          data: { form: {} },
+        },
+        {
+          id: square,
+          type: "imageGen",
+          position: POS(920, -220),
+          data: {
+            form: {
+              ...imageForm(),
+              size: "2048x2048",
+            },
+          },
+        },
+        {
+          id: vertical,
+          type: "imageGen",
+          position: POS(920, 560),
+          data: {
+            form: {
+              ...imageForm(),
+              size: "2160x3840",
+            },
+          },
+        },
+        {
+          id: video,
+          type: "videoGen",
+          position: POS(920, 900),
+          data: {
+            form: {
+              ...videoForm(),
+              duration: 5,
+              ratio: "9:16",
+            },
+          },
+        },
+        {
+          id: squarePv,
+          type: "preview",
+          position: POS(1320, -220),
+          data: { form: {} },
+        },
+        {
+          id: verticalPv,
+          type: "preview",
+          position: POS(1320, 560),
+          data: { form: {} },
+        },
+        {
+          id: videoPv,
+          type: "preview",
+          position: POS(1320, 900),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${heroPrompt}-${st}-prompt`,
+          source: heroPrompt,
+          sourceHandle: "prompt",
+          target: st,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${we}-${st}-style`,
+          source: we,
+          sourceHandle: "images",
+          target: st,
+          targetHandle: "style",
+        },
+        {
+          id: `${ap}-${st}-content`,
+          source: ap,
+          sourceHandle: "url",
+          target: st,
+          targetHandle: "content",
+        },
+        {
+          id: `${st}-${heroPv}-url`,
+          source: st,
+          sourceHandle: "url",
+          target: heroPv,
+          targetHandle: "url",
+        },
+        {
+          id: `${squarePrompt}-${square}-prompt`,
+          source: squarePrompt,
+          sourceHandle: "prompt",
+          target: square,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${st}-${square}-image`,
+          source: st,
+          sourceHandle: "url",
+          target: square,
+          targetHandle: "image",
+        },
+        {
+          id: `${verticalPrompt}-${vertical}-prompt`,
+          source: verticalPrompt,
+          sourceHandle: "prompt",
+          target: vertical,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${st}-${vertical}-image`,
+          source: st,
+          sourceHandle: "url",
+          target: vertical,
+          targetHandle: "image",
+        },
+        {
+          id: `${videoPrompt}-${videoStyle}-prompt`,
+          source: videoPrompt,
+          sourceHandle: "prompt",
+          target: videoStyle,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${videoStyle}-${video}-prompt`,
+          source: videoStyle,
+          sourceHandle: "prompt",
+          target: video,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${st}-${video}-image`,
+          source: st,
+          sourceHandle: "url",
+          target: video,
+          targetHandle: "image",
+        },
+        {
+          id: `${square}-${squarePv}`,
+          source: square,
+          sourceHandle: "url",
+          target: squarePv,
+          targetHandle: "url",
+        },
+        {
+          id: `${vertical}-${verticalPv}`,
+          source: vertical,
+          sourceHandle: "url",
+          target: verticalPv,
+          targetHandle: "url",
+        },
+        {
+          id: `${video}-${videoPv}`,
+          source: video,
+          sourceHandle: "url",
+          target: videoPv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
   quickClip,
   imageToVideo,
   articleNarration,
+  referenceCreativePackage,
 ] as const;
 
 export function findTemplate(id: string): StudioTemplate | undefined {

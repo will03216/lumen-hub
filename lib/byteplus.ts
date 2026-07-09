@@ -179,6 +179,74 @@ export type CaptionResponse = { caption: string };
 const CAPTION_MODEL =
   process.env.BYTEPLUS_CAPTION_MODEL ?? "seed-2-0-lite-260228";
 
+export function shouldUseResponsesApi(model: string, mode?: string): boolean {
+  const normalizedMode = mode?.trim().toLowerCase();
+  if (normalizedMode === "responses") return true;
+  if (normalizedMode === "chat") return false;
+  return /^seed-2-0-pro\b/i.test(model);
+}
+
+type ResponsesContentBlock =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string };
+
+export function buildResponsesBody({
+  model,
+  instruction,
+  content,
+  maxTokens,
+  temperature,
+}: {
+  model: string;
+  instruction?: string;
+  content: ResponsesContentBlock[];
+  maxTokens: number;
+  temperature?: number;
+}) {
+  const inputContent = instruction?.trim()
+    ? [{ type: "input_text" as const, text: instruction.trim() }, ...content]
+    : content;
+  return {
+    model: resolveModel(model),
+    stream: false,
+    input: [
+      {
+        role: "user",
+        content: inputContent,
+      },
+    ],
+    max_output_tokens: maxTokens,
+    ...(temperature === undefined ? {} : { temperature }),
+  };
+}
+
+export function extractResponsesText(out: unknown): string | undefined {
+  if (!out || typeof out !== "object") return undefined;
+  const record = out as Record<string, unknown>;
+  if (typeof record.output_text === "string") return record.output_text;
+
+  const output = record.output;
+  if (!Array.isArray(output)) return undefined;
+
+  const chunks: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const itemRecord = item as Record<string, unknown>;
+    if (typeof itemRecord.text === "string") chunks.push(itemRecord.text);
+
+    const content = itemRecord.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const partRecord = part as Record<string, unknown>;
+      if (typeof partRecord.text === "string") chunks.push(partRecord.text);
+      if (typeof partRecord.value === "string") chunks.push(partRecord.value);
+    }
+  }
+
+  return chunks.join("").trim() || undefined;
+}
+
 /** Default brief — mirrors the placeholder copy on §01 Prompt
  *  ("Describe the frame. Be specific about lens, light, stock, era.")
  *  so a dropped image lands a prompt indistinguishable from one the
@@ -190,8 +258,28 @@ color palette. One sentence, present tense, no preamble, no quotes, no
 "this image shows". Aim for 25-40 words.`;
 
 export async function captionImage(p: CaptionParams, apiKey?: string): Promise<CaptionResponse> {
+  const model = CAPTION_MODEL;
+  if (shouldUseResponsesApi(model, process.env.BYTEPLUS_CAPTION_API)) {
+    const body = buildResponsesBody({
+      model,
+      instruction: p.instruction ?? DEFAULT_INSTRUCTION,
+      content: [{ type: "input_image", image_url: p.imageDataUrl }],
+      maxTokens: 300,
+      temperature: 0.2,
+    });
+    const out = await request<unknown>("/responses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, apiKey);
+    const raw = extractResponsesText(out)?.trim();
+    if (!raw) {
+      throw new BytePlusError(502, "Bad Gateway", "no caption in responses output");
+    }
+    return { caption: raw.replace(/^["'`]+|["'`]+$/g, "").trim() };
+  }
+
   const body = {
-    model: resolveModel(CAPTION_MODEL),
+    model: resolveModel(model),
     messages: [
       {
         role: "user",
@@ -480,6 +568,17 @@ export type ComposePromptParams = {
 
 export type ComposePromptResponse = { prompt: string };
 
+export type VideoFrameAnalysisParams = {
+  frames: string[];
+  instruction: string;
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  jsonObject?: boolean;
+};
+
+export type VideoFrameAnalysisResponse = { text: string };
+
 const COMPOSE_SYSTEM: Record<"seedream" | "seedance" | "generic", string> = {
   seedream: `You are an expert prompt engineer for Seedream, a text-to-image model.
 Write a rich, detailed image-generation prompt based on the user's goal and provided context (text, images, or video references).
@@ -540,9 +639,31 @@ export async function composePrompt(
 
   const temperature = Math.min(2, Math.max(0, p.temperature ?? 0.8));
   const maxTokens = Math.min(8192, Math.max(50, p.maxTokens ?? 500));
+  const model = PROMPT_MODEL;
+
+  if (shouldUseResponsesApi(model, process.env.BYTEPLUS_PROMPT_API)) {
+    const responseContent: ResponsesContentBlock[] = content.map((block) => {
+      if (block.type === "text") return { type: "input_text", text: block.text };
+      return { type: "input_image", image_url: block.image_url.url };
+    });
+    const body = buildResponsesBody({
+      model,
+      instruction: systemContent,
+      content: responseContent,
+      maxTokens,
+      temperature,
+    });
+    const out = await request<unknown>("/responses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, apiKey);
+    const raw = extractResponsesText(out)?.trim();
+    if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in responses output");
+    return { prompt: raw.replace(/^["'`]+|["'`]+$/g, "").trim() };
+  }
 
   const body = {
-    model: resolveModel(PROMPT_MODEL),
+    model: resolveModel(model),
     messages: [
       { role: "system", content: systemContent },
       { role: "user", content },
@@ -559,6 +680,39 @@ export async function composePrompt(
   if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
   const prompt = raw.replace(/^["'`]+|["'`]+$/g, "").trim();
   return { prompt };
+}
+
+export async function analyzeVideoFrames(
+  p: VideoFrameAnalysisParams,
+  apiKey?: string,
+): Promise<VideoFrameAnalysisResponse> {
+  const frames = p.frames.map((frame) => frame.trim()).filter(Boolean).slice(0, 10);
+  if (frames.length === 0) {
+    throw new Error("Provide at least one frame for video analysis.");
+  }
+
+  const model = p.model ?? PROMPT_MODEL;
+  const content: ResponsesContentBlock[] = [
+    { type: "input_text", text: p.instruction },
+    ...frames.map((frame) => ({ type: "input_image" as const, image_url: frame })),
+  ];
+  const body = {
+    ...buildResponsesBody({
+      model,
+      content,
+      maxTokens: Math.min(8192, Math.max(200, p.maxTokens ?? 1400)),
+      temperature: Math.min(2, Math.max(0, p.temperature ?? 0.25)),
+    }),
+    ...(p.jsonObject ? { text: { format: { type: "json_object" } } } : {}),
+  };
+
+  const out = await request<unknown>("/responses", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }, apiKey);
+  const raw = extractResponsesText(out)?.trim();
+  if (!raw) throw new BytePlusError(502, "Bad Gateway", "no video-frame analysis output");
+  return { text: raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim() };
 }
 
 /** Returns a copy-paste ready curl command that reproduces the exact BytePlus

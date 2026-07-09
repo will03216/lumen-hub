@@ -38,6 +38,7 @@ import { ArticleNarrationNode } from "./nodes/article-narration-node";
 import { MusicOverlayNode } from "./nodes/music-overlay-node";
 import { VideoStitchNode } from "./nodes/video-stitch-node";
 import { UrlInputNode } from "./nodes/url-input-node";
+import { VideoStyleExtractNode } from "./nodes/video-style-extract-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -65,6 +66,7 @@ const nodeTypes: NodeTypes = {
   musicOverlay: MusicOverlayNode,
   videoStitch: VideoStitchNode,
   urlInput: UrlInputNode,
+  videoStyleExtract: VideoStyleExtractNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with

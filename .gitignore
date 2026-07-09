@@ -45,3 +45,9 @@ public/library-cache/
 
 # deploy config (CR creds, build vars)
 deploy/.env.deploy
+
+# Local dev artifacts — not for source control
+.venv/
+tmp/
+output/
+.claude/

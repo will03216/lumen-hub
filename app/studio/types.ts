@@ -40,6 +40,7 @@ export const NODE_TYPE_IDS = [
   "musicOverlay",
   "videoStitch",
   "urlInput",
+  "videoStyleExtract",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 

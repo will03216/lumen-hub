@@ -29,6 +29,7 @@ import { articleNarrationSpec } from "./article-narration-node";
 import { musicOverlaySpec } from "./music-overlay-node";
 import { videoStitchSpec } from "./video-stitch-node";
 import { urlInputSpec } from "./url-input-node";
+import { videoStyleExtractSpec } from "./video-style-extract-node";
 
 /**
  * The registry is the type-erasure boundary.
@@ -63,6 +64,7 @@ const REGISTRY: Record<NodeTypeId, AnyNodeSpec> = {
   musicOverlay: musicOverlaySpec,
   videoStitch: videoStitchSpec,
   urlInput: urlInputSpec,
+  videoStyleExtract: videoStyleExtractSpec,
 };
 
 export function getNodeSpec(type: string | undefined): AnyNodeSpec | undefined {
