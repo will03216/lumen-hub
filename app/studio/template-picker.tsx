@@ -165,6 +165,13 @@ const TEMPLATE_FLOWS: Record<string, Array<{ icon: LucideIcon }>> = {
     { icon: FileText },
     { icon: VideoIcon },
   ],
+  "reference-creative-package": [
+    { icon: Globe },
+    { icon: ImageIcon },
+    { icon: Sparkles },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
 };
 
 function CornerTicks() {

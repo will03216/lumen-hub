@@ -23,6 +23,8 @@ export type RouteTag =
   | "image"
   | "video.create"
   | "video.poll"
+  | "video.analyze-style"
+  | "video.enhance-prompt"
   | "audio"
   | "audio.upload"
   | "caption"

@@ -41,6 +41,7 @@ export const NODE_TYPE_IDS = [
   "videoStitch",
   "videoUpscale",
   "urlInput",
+  "videoStyleExtract",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 
