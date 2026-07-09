@@ -12,7 +12,7 @@ describe("Reference Creative Package template", () => {
     expect(types).toContain("webExtract");
     expect(types).toContain("asset");
     expect(types).toContain("videoStyleExtract");
-    expect(types.filter((type) => type === "textPrompt")).toHaveLength(4);
+    expect(types.filter((type) => type === "textPrompt")).toHaveLength(3);
     expect(types).toContain("styleTransfer");
     expect(types.filter((type) => type === "imageGen")).toHaveLength(2);
     expect(types).toContain("videoGen");
@@ -29,7 +29,6 @@ describe("Reference Creative Package template", () => {
     expect(promptText).toContain("hero poster");
     expect(promptText).toContain("square poster variant");
     expect(promptText).toContain("vertical story poster");
-    expect(promptText).toContain("poster-style product video");
     expect(promptText).toContain("No CTA");
     expect(promptText).not.toMatch(/Shop Now/i);
 

@@ -320,7 +320,6 @@ const referenceCreativePackage: StudioTemplate = {
     const heroPrompt = newId("tp-hero");
     const squarePrompt = newId("tp-square");
     const verticalPrompt = newId("tp-vertical");
-    const videoPrompt = newId("tp-video");
     const we = newId("we");
     const ap = newId("ap");
     const videoStyle = newId("vse");
@@ -339,9 +338,6 @@ const referenceCreativePackage: StudioTemplate = {
       "Create a square poster variant from the hero poster reference. Keep the same product, glossy beauty mood, white studio background, and refined premium composition, but make a fresh balanced 1:1 layout with slight product repositioning, clean negative space, and polished cosmetic campaign styling. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
     const verticalPosterPrompt =
       "Create a vertical story poster from the hero poster reference. Keep the same product and premium beauty aesthetic, but redesign it for a 9:16 mobile story composition with taller framing, elegant product reveal, glossy pink texture detail, soft light shimmer, and clean white space. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
-    const videoMotionPrompt =
-      "Create a poster-style product video from the hero poster reference. Keep the same product, white studio background, glossy pink lip texture, and premium beauty aesthetic. Add subtle camera push-in, soft light shimmer, gentle gloss movement, and refined product reveal motion. No CTA, no button, no extra typography, no price, no discount. Only preserve text naturally printed on the product packaging.";
-
     return {
       nodes: [
         {
@@ -361,12 +357,6 @@ const referenceCreativePackage: StudioTemplate = {
           type: "textPrompt",
           position: POS(520, 620),
           data: { form: textForm(verticalPosterPrompt) },
-        },
-        {
-          id: videoPrompt,
-          type: "textPrompt",
-          position: POS(520, 940),
-          data: { form: textForm(videoMotionPrompt) },
         },
         {
           id: videoStyle,
@@ -518,13 +508,6 @@ const referenceCreativePackage: StudioTemplate = {
           sourceHandle: "url",
           target: vertical,
           targetHandle: "image",
-        },
-        {
-          id: `${videoPrompt}-${videoStyle}-prompt`,
-          source: videoPrompt,
-          sourceHandle: "prompt",
-          target: videoStyle,
-          targetHandle: "prompt",
         },
         {
           id: `${videoStyle}-${video}-prompt`,

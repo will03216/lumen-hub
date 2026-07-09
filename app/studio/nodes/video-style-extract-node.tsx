@@ -225,7 +225,7 @@ export const videoStyleExtractSpec: NodeTypeSpec<VideoStyleExtractForm> = {
   label: "Video Style Extract",
   description:
     "Analyze a reference video into a product-agnostic style brief, then combine it with your target product into a Seedance enhanced prompt.",
-  inputs: [{ id: "prompt", label: "base prompt (optional)" }],
+  inputs: [],
   outputs: [
     { id: "prompt", label: "enhanced prompt" },
     { id: "styleBrief", label: "style brief" },
