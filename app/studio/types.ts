@@ -39,6 +39,7 @@ export const NODE_TYPE_IDS = [
   "articleNarration",
   "musicOverlay",
   "videoStitch",
+  "videoUpscale",
   "urlInput",
   "videoStyleExtract",
 ] as const;

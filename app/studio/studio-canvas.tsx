@@ -37,6 +37,7 @@ import { ArticleIngesterNode } from "./nodes/article-ingester-node";
 import { ArticleNarrationNode } from "./nodes/article-narration-node";
 import { MusicOverlayNode } from "./nodes/music-overlay-node";
 import { VideoStitchNode } from "./nodes/video-stitch-node";
+import { VideoUpscaleNode } from "./nodes/video-upscale-node";
 import { UrlInputNode } from "./nodes/url-input-node";
 import { VideoStyleExtractNode } from "./nodes/video-style-extract-node";
 import { getNodeSpec } from "./nodes/registry";
@@ -65,6 +66,7 @@ const nodeTypes: NodeTypes = {
   articleNarration: ArticleNarrationNode,
   musicOverlay: MusicOverlayNode,
   videoStitch: VideoStitchNode,
+  videoUpscale: VideoUpscaleNode,
   urlInput: UrlInputNode,
   videoStyleExtract: VideoStyleExtractNode,
 };
