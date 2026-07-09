@@ -1,5 +1,6 @@
 FROM node:20-alpine AS base
-RUN apk add --no-cache ffmpeg libc6-compat
+RUN apk add --no-cache ffmpeg libc6-compat python3 py3-pip \
+    && pip install --no-cache-dir --break-system-packages yt-dlp
 
 FROM base AS deps
 WORKDIR /app

@@ -12,3 +12,8 @@ design/
 debug/
 docker-compose.yml
 .dockerignore
+.venv
+tmp
+output
+docs
+.claude
