@@ -8,6 +8,12 @@ providers. Built on **Next.js 16 + React 19 + Tailwind v4 + Radix**.
 - **Video Generator** (Seedance) — text-to-video, image-to-video, first+last frame
   keyframes, 480p/720p/1080p, 5s/10s, multiple aspect ratios, fixed-camera toggle,
   native audio (2.0), automatic async polling
+- **Video Style Extract** (Studio canvas node) — paste a reference video URL
+  (TikTok, YouTube, etc.), extract a product-agnostic style brief (motion
+  grammar, camera, lighting, pacing, composition), then combine it with your own
+  product into a Seedance-ready enhanced prompt. Optional — requires
+  [yt-dlp](https://github.com/yt-dlp/yt-dlp) locally (see [Video Style Extract
+  setup](#optional-video-style-extract-dependencies)).
 - **Compare**, **Library** (with optional cloud sync), **Studio** canvas, and a
   **Story / reels** pipeline (shot generation → prompts → stitch with audio)
 - Dark, cinematic UI
@@ -22,6 +28,10 @@ providers. Built on **Next.js 16 + React 19 + Tailwind v4 + Radix**.
 | **Docker** (or any PostgreSQL 15+) | Stores your account, encrypted API keys, Studio canvases | Free (self-hosted) |
 | **A Clerk account** ([clerk.com](https://clerk.com)) | Authentication / accounts | Free tier |
 | **A BytePlus / Ark API key** ([console.byteplus.com](https://console.byteplus.com)) | The AI models (Seedream images, Seedance video) | BytePlus usage-billed |
+| **yt-dlp** *(optional)* | Video Style Extract node downloads reference clips (TikTok, YouTube…) to extract frames. Not needed for the rest of the app. | Free |
+
+> `ffmpeg` for frame extraction ships inside the app via the `ffmpeg-static` npm
+> package — no separate install needed.
 
 > **Bring-your-own-key (BYOK).** Provider API keys are **not** put in a config
 > file. Each signed-in user pastes their own keys into the in-app **Settings**
@@ -168,6 +178,30 @@ variable substitution, and the app container reaches Postgres internally at
 > Settings — those nodes upload the rendered file to TOS and will fail with a
 > `402 missing_api_key` (or a TOS `InvalidAccessKeyId`) without them. See
 > [Provider keys](#provider-keys--entered-per-user-in-settings-not-as-env-vars).
+
+### Optional: Video Style Extract dependencies
+
+The **Video Style Extract** canvas node downloads a reference video (TikTok,
+YouTube, etc.) and extracts frames for vision analysis. It needs
+[`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on the server's PATH. `ffmpeg`
+is already bundled via the `ffmpeg-static` npm dependency — no extra install.
+
+The route looks for yt-dlp in this order (first match wins):
+
+1. A global `yt-dlp` CLI on PATH (install via `brew install yt-dlp`, `pipx
+   install yt-dlp`, or your distro's package manager), **or**
+2. A project-local Python venv at `.venv/bin/python -m yt_dlp`:
+
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/pip install yt-dlp
+   ```
+
+3. A system `python3 -m yt_dlp` (if the `yt_dlp` package is globally installed).
+
+If none are found, the node surfaces a clear error (`Could not analyze video
+URL. Install yt-dlp…`) — the rest of the app is unaffected. You only need
+yt-dlp if you actually use this node.
 
 ### Verify it's working
 
@@ -322,6 +356,7 @@ When either is set, only matching emails get in; everyone else is sent to
 | Port 3000 already in use | Next.js auto-picks the next free port; check the terminal output. |
 | Docker build fails at `npm ci` with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | A TLS-intercepting proxy (e.g. corporate Docker Desktop proxy) the build container doesn't trust. Either add the proxy's CA to the build, or disable strict TLS for the `deps` stage only (integrity is still enforced by `package-lock.json` hashes). |
 | App container shows `unhealthy` but works from the host | Healthcheck must hit `127.0.0.1`, not `localhost` — inside Alpine `localhost` resolves to IPv6 `::1` while the server binds IPv4. (Already fixed in the shipped compose files.) |
+| Video Style Extract: "Could not analyze video URL" | The server can't find `yt-dlp`. Install it globally (`brew install yt-dlp` / `pipx install yt-dlp`) or create a project venv (`.venv/bin/pip install yt-dlp`). See [Video Style Extract dependencies](#optional-video-style-extract-dependencies). |
 
 ---
 
