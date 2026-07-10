@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import ffmpegPath from "ffmpeg-static";
-import { BytePlusError, analyzeVideoFrames, captionImage } from "@/lib/byteplus";
+import { BytePlusError, analyzeVideoFrames } from "@/lib/byteplus";
 import { logRouteError } from "@/lib/server-log";
-import { getUserKeys } from "@/lib/server/user-keys";
+import { getUserKeys, keyErrorResponse, MissingKeyError } from "@/lib/server/user-keys";
 import {
   buildProductAgnosticStyleBrief,
   buildVisionAnalysisInstruction,
@@ -186,6 +186,17 @@ async function analyzeFrames(
     ]);
     const byteplus = keysResult?.byteplus;
     console.log("[vse-debug] got byteplus key?", !!byteplus, "timedOut?", keysResult === null);
+
+    // Strict BYOK — no env fallback. If the user has no BytePlus key saved,
+    // fail fast BEFORE the expensive download/extract/analyze work. Surfacing
+    // this as MissingKeyError lets the POST handler return the 402
+    // missing_api_key contract (same as image-gen) so the node can prompt the
+    // user to add a key in Settings, instead of silently degrading into a
+    // generic template brief that pretends the video was analysed.
+    if (!byteplus) {
+      throw new MissingKeyError("byteplus");
+    }
+
     dir = await mkdtemp(path.join(tmpdir(), "lumen-style-"));
     console.log("[vse-debug] tmpdir:", dir);
     const videoPath = await downloadVideo(videoUrl, dir);
@@ -206,63 +217,39 @@ async function analyzeFrames(
     const analysisFrames = selectSeedanceAnalysisFrames(frameImages, referenceFrame, 8);
     console.log("[vse-debug] extracted", frameImages.length, "frames; calling SeedPro vision…");
 
-    try {
-      const out = await analyzeVideoFrames({
-        frames: analysisFrames,
-        jsonObject: true,
-        // Use the Pro model: the Lite model emits a long `reasoning` block that
-        // consumes the whole token budget before it reaches the final JSON
-        // output (returns `incomplete_details: reason: length` with no text),
-        // which surfaces as a 502 "no video-frame analysis output". Pro is the
-        // same model the S project uses for this analysis.
-        model: process.env.BYTEPLUS_VISION_MODEL ?? "seed-2-0-pro-260328",
-        maxTokens: 4000,
-        temperature: 0.2,
-        instruction: buildVisionAnalysisInstruction({
-          metadata,
-          referenceFrameIndex: referenceFrame?.frameIndex,
-        }),
-      }, byteplus);
-      console.log("[vse-debug] SeedPro returned text len =", out.text.length, "preview =", out.text.slice(0, 200));
-      const parsed = parseVideoStyleVisionAnalysis(out.text);
-      console.log("[vse-debug] parsed?", !!parsed, "styleBrief?", !!parsed?.styleBrief, "analysis?", !!parsed?.analysis);
-      if (parsed && (parsed.styleBrief || parsed.analysis)) {
-        return {
-          styleBrief: parsed.styleBrief,
-          frameObservations: parsed.frameObservations,
-          analysis: parsed.analysis,
-          caveats,
-        };
-      }
-      caveats.push("SeedPro frame-sequence analysis returned unparsable output; fell back to frame captions.");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log("[vse-debug] SeedPro vision THREW:", message.slice(0, 300));
-      if (err instanceof BytePlusError) {
-        console.log("[vse-debug] BytePlusError status=", err.status, "body=", err.body.slice(0, 600));
-      }
-      caveats.push(`SeedPro frame-sequence analysis skipped: ${message.slice(0, 240)}`);
+    // Never return a fake brief. The SeedPro frame-sequence analysis is the
+    // ONLY source of a style brief — if it throws or returns unparsable output
+    // we let the error propagate (with its real cause) rather than catch it and
+    // assemble a brief from hardcoded templates, which would silently present a
+    // generic default as if it were extracted from this video.
+    const out = await analyzeVideoFrames({
+      frames: analysisFrames,
+      jsonObject: true,
+      // Use the Pro model: the Lite model emits a long `reasoning` block that
+      // consumes the whole token budget before it reaches the final JSON
+      // output (returns `incomplete_details: reason: length` with no text),
+      // which surfaces as a 502 "no video-frame analysis output". Pro is the
+      // same model the S project uses for this analysis.
+      model: process.env.BYTEPLUS_VISION_MODEL ?? "seed-2-0-pro-260328",
+      maxTokens: 4000,
+      temperature: 0.2,
+      instruction: buildVisionAnalysisInstruction({
+        metadata,
+        referenceFrameIndex: referenceFrame?.frameIndex,
+      }),
+    }, byteplus);
+    console.log("[vse-debug] SeedPro returned text len =", out.text.length, "preview =", out.text.slice(0, 200));
+    const parsed = parseVideoStyleVisionAnalysis(out.text);
+    console.log("[vse-debug] parsed?", !!parsed, "styleBrief?", !!parsed?.styleBrief, "analysis?", !!parsed?.analysis);
+    if (!parsed || (!parsed.styleBrief && !parsed.analysis)) {
+      throw new Error("SeedPro frame-sequence analysis returned unparsable output; no style brief could be extracted from this video.");
     }
-
-    // Fallback: caption a few frames individually, then build a brief from those.
-    const captions: string[] = [];
-    for (const imageDataUrl of analysisFrames.slice(0, 4)) {
-      const out = await captionImage({
-        imageDataUrl,
-        instruction:
-          "Describe this advertising video frame in product-neutral terms for prompt engineering. Focus on composition, camera distance, lighting, color palette, texture, motion implication, and luxury/beauty art direction. Do NOT name any brand or product. One concise sentence.",
-      }, byteplus);
-      captions.push(out.caption);
-    }
-    return { frameObservations: captions, caveats };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (err instanceof BytePlusError) {
-      caveats.push(`Frame visual analysis skipped: ${err.statusText}`);
-    } else {
-      caveats.push(`Frame visual analysis skipped: ${message.slice(0, 240)}`);
-    }
-    return { frameObservations: [], caveats };
+    return {
+      styleBrief: parsed.styleBrief,
+      frameObservations: parsed.frameObservations,
+      analysis: parsed.analysis,
+      caveats,
+    };
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -284,9 +271,12 @@ export async function POST(req: NextRequest) {
     const { styleBrief: visionStyleBrief, frameObservations, caveats, analysis } = await analyzeFrames(videoUrl, metadata);
     console.log("[vse-debug] analyzeFrames done. styleBrief?", !!visionStyleBrief, "analysis?", !!analysis, "caveats=", caveats.length);
 
-    // Build the product-agnostic style brief. Prefer the vision model's
-    // structured output; if it failed, fall back to a brief assembled from the
-    // individual frame captions + metadata.
+    // Build the product-agnostic style brief from the vision model's
+    // structured analysis. analyzeFrames only returns on a successful SeedPro
+    // analysis — it never returns a template/fallback brief — so `analysis`
+    // is always real here. (buildProductAgnosticStyleBrief still holds its
+    // template fallbacks for direct/unit-tested callers, but this route does
+    // not reach them: no analysis ⇒ analyzeFrames throws ⇒ we never get here.)
     const brief = buildProductAgnosticStyleBrief({
       metadata,
       analysis,
@@ -305,6 +295,19 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     logRouteError("video.analyze-style", err, startedAt);
+    // Strict BYOK — a missing user key surfaces as the 402 missing_api_key
+    // contract (same as image-gen) so the client can prompt the user to add a
+    // key in Settings, not as an opaque 500.
+    const keyResp = keyErrorResponse(err);
+    if (keyResp) return keyResp;
+    // Forward a real BytePlus HTTP status 1:1 so any client classifier can
+    // dispatch on it (429 → rate-limit, 4xx → invalid-input, 5xx → transient).
+    if (err instanceof BytePlusError) {
+      return NextResponse.json(
+        { error: err.message, code: err.statusText },
+        { status: err.status },
+      );
+    }
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
   }

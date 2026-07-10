@@ -254,7 +254,15 @@ export const videoStyleExtractSpec: NodeTypeSpec<VideoStyleExtractForm> = {
       signal,
     });
     const json = (await res.json()) as AnalyzeStyleResponse;
-    if (!res.ok) throw new Error(json.error ?? "video style analysis failed");
+    if (!res.ok) {
+      // The route returns 402 missing_api_key when the user has no BytePlus
+      // key saved — surface that as an actionable instruction rather than the
+      // raw message. VSE never fakes a brief, so a key is required to analyse.
+      if (json.error === "missing_api_key") {
+        throw new Error("Add your BytePlus API key in Settings, then re-run this node.");
+      }
+      throw new Error(json.error ?? "video style analysis failed");
+    }
     if (!json.styleBrief) {
       throw new Error("No video style brief returned.");
     }
