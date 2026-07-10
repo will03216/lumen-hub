@@ -8,8 +8,12 @@
 // ─────────────────────────── Image ──────────────────────────────────────
 
 /**
- * Seedream 5.0 Lite requires ≥ 3,686,400 px and ≤ 4096×4096. Sizes below all
- * satisfy that range and cover square + 16:9 + 9:16.
+ * Size presets offered in the Image Gen dropdown. Each Seedream generation has
+ * its own pixel ceiling (5.0 Pro caps at 2K / 2048×2048, 5.0 Lite at 3K, 4.5 at
+ * 4K), and the engine rejects an out-of-range size with a 400 that the
+ * /api/image route surfaces as-is — there is no per-model client-side clamp.
+ * The presets below stay inside the lowest common ceiling so they work on any
+ * selected model.
  */
 export const IMAGE_SIZES = [
   "2048x2048", // 1:1  · 4.2 MP (default)
@@ -37,6 +41,11 @@ export type ImageModel = {
 };
 
 export const IMAGE_MODELS: readonly ImageModel[] = [
+  {
+    id: "dola-seedream-5-0-pro-260628",
+    label: "Seedream 5.0 Pro",
+    hint: "Top fidelity · 2K",
+  },
   {
     id: "seedream-5-0-lite-260128",
     label: "Seedream 5.0 Lite",

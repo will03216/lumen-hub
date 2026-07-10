@@ -101,8 +101,8 @@ async function request<T>(path: string, init: RequestInit, keyOverride?: string)
 
 // ---------- Image ----------
 /**
- * Seedream 4.5 / 5.0 Lite shared request shape. Both models use the same
- * OpenAI-compatible endpoint; mode is inferred from the inputs:
+ * Seedream 4.5 / 5.0 Lite / 5.0 Pro shared request shape. All three models use
+ * the same OpenAI-compatible endpoint; mode is inferred from the inputs:
  *
  *   T2I                     no `image`, no `sequential`
  *   I2I (single)            `image` is a single URL / base64 / data URI
