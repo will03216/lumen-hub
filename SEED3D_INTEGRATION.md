@@ -115,8 +115,14 @@ render `size` (512/768/1024), `background` color.
 | `frames` | All frame URLs (newline-joined) → for R2V / reference images |
 | `glb` | Same-origin GLB stream URL (download / preview) |
 
-`first + last` gives Seedance a **~180° bookend orbit**. A full 360° spin is a
-follow-up using the `frames` output with Seedance's multi-reference (R2V) mode.
+Two ways to drive the video:
+- **~180° bookend** — wire `first frame` → Video Gen `image` and `last frame`
+  → `lastFrame`. Seedance tweens between the two. Template: **3D Turntable (Seed3D)**.
+- **Full 360° (R2V)** — wire `frames` → Video Gen `refImages`. All turntable
+  views become Seedance 2.0 **reference images**, so the model sees the product
+  from every side and can render a consistent full rotation. Template:
+  **3D Turntable 360° (R2V)** — uses 4 orthogonal views (0/90/180/270°).
+  R2V requires **Seedance 2.0**; keep the reference count small (≤4–6).
 
 ---
 
@@ -178,8 +184,11 @@ signed-in browser session and were left for interactive testing.
 
 ## Known limitations / follow-ups
 
-- **~180° orbit only** via the first/last bookend. Full 360° needs the R2V path
-  (`frames` output → Seedance multi-reference).
+- **360° via R2V is prompt-driven.** The R2V path gives Seedance every angle as
+  reference images, but the *rotation itself* still comes from the motion prompt
+  — Seedance has no explicit "rotate exactly 360°" control, so results vary. For
+  a guaranteed mechanical turntable, stitching the rendered frames directly into
+  a clip (they already cover 360°) is an alternative worth exploring.
 - **Mesh persistence:** `/api/model3d/mesh` streams the GLB on demand by
   re-fetching the source zip, which expires after 24 h. Long-term, mirror the
   GLB to permanent storage (same pattern recommended for the Library).

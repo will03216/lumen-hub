@@ -677,12 +677,138 @@ const turntable3D: StudioTemplate = {
   },
 };
 
+const turntable360R2V: StudioTemplate = {
+  id: "turntable-360-r2v",
+  name: "3D Turntable 360° (R2V)",
+  description:
+    "Full-rotation variant of the 3D turntable. Image → 3D renders 4 evenly-spaced views (0/90/180/270°) and feeds ALL of them into Seedance 2.0 as reference images (R2V), so the model sees the product from every side and can render a consistent full 360° spin — instead of the ~180° first/last bookend. Needs a Seed3D key in Settings.",
+  badge: "360°",
+  order: 6,
+  build: (): CanvasShape => {
+    const tpImg = newId("tp-img");
+    const tpMotion = newId("tp-motion");
+    const ig = newId("ig");
+    const i3d = newId("i3d");
+    const vg = newId("vg");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: tpImg,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: {
+            form: textForm(
+              "A single modern sneaker centered on a plain seamless white studio background, product photography, soft even lighting, no props, sharp focus, full object visible",
+            ),
+          },
+        },
+        {
+          id: ig,
+          type: "imageGen",
+          position: POS(380, -40),
+          data: { form: imageForm() },
+        },
+        {
+          id: i3d,
+          type: "imageTo3D",
+          position: POS(760, 0),
+          data: {
+            // 4 frames → refs at 0/90/180/270°. Kept small: Seedance takes a
+            // handful of reference images, and 4 orthogonal views already
+            // describe the object all the way around.
+            form: {
+              subdivision: "high",
+              frames: 4,
+              size: 768,
+              background: "#ffffff",
+            },
+          },
+        },
+        {
+          id: tpMotion,
+          type: "textPrompt",
+          position: POS(760, 460),
+          data: {
+            form: textForm(
+              "Full continuous 360-degree turntable rotation of the product, one complete revolution at a smooth constant speed, the object stays centered, clean studio lighting, fixed camera framing",
+            ),
+          },
+        },
+        {
+          id: vg,
+          type: "videoGen",
+          position: POS(1160, 160),
+          // DEFAULT_VIDEO_MODEL_ID is Seedance 2.0 — required for R2V
+          // reference images.
+          data: {
+            form: {
+              ...videoForm(),
+              ratio: "1:1",
+              duration: 5,
+            },
+          },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1560, 160),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        // Product prompt → Image Gen
+        {
+          id: `${tpImg}-${ig}`,
+          source: tpImg,
+          sourceHandle: "prompt",
+          target: ig,
+          targetHandle: "prompt",
+        },
+        // Image (public TOS URL) → Image → 3D
+        {
+          id: `${ig}-${i3d}`,
+          source: ig,
+          sourceHandle: "url",
+          target: i3d,
+          targetHandle: "image",
+        },
+        // All turntable frames → Video Gen reference images (R2V, 2.0 only)
+        {
+          id: `${i3d}-${vg}-refs`,
+          source: i3d,
+          sourceHandle: "frames",
+          target: vg,
+          targetHandle: "refImages",
+        },
+        // 360° motion prompt → Video Gen
+        {
+          id: `${tpMotion}-${vg}`,
+          source: tpMotion,
+          sourceHandle: "prompt",
+          target: vg,
+          targetHandle: "prompt",
+        },
+        // Video → Preview
+        {
+          id: `${vg}-${pv}`,
+          source: vg,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
   quickClip,
   imageToVideo,
   turntable3D,
+  turntable360R2V,
   articleNarration,
   referenceCreativePackage,
 ] as const;
