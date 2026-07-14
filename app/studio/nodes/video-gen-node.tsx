@@ -55,13 +55,15 @@ function modeLabel(handles: Set<string>): string {
   const hasLast = handles.has("lastFrame");
   const hasRefImgs = handles.has("refImages");
   const hasRefAssets = handles.has("references");
-  const hasRefs = hasRefImgs || hasRefAssets;
+  const hasRefVideo = handles.has("refVideo");
+  const hasRefs = hasRefImgs || hasRefAssets || hasRefVideo;
 
   if (!hasFirst && !hasLast && !hasRefs) return "T2V";
   const parts: string[] = [];
   if (hasFirst && hasLast) parts.push("first+last");
   else if (hasFirst) parts.push("first frame");
   else if (hasLast) parts.push("last frame only");
+  if (hasRefVideo) parts.push("ref video");
   if (hasRefImgs && hasRefAssets) parts.push("URL refs + assets");
   else if (hasRefImgs) parts.push("URL refs");
   else if (hasRefAssets) parts.push("asset refs");
@@ -130,6 +132,7 @@ export const VideoGenNode = memo(function VideoGenNode({
     const lastFrame = portInputs.lastFrame;
     const refImagesRaw = portInputs.refImages;
     const referencesRaw = portInputs.references;
+    const refVideoRaw = portInputs.refVideo;
 
     const modelCaps = findVideoModel(d.form.model)?.caps;
     const validDurations = modelCaps?.durations ?? [5];
@@ -171,6 +174,9 @@ export const VideoGenNode = memo(function VideoGenNode({
         .filter(Boolean)
         .map((r) => ({ role: "subject", ...parseAssetRef(r) }));
       if (refs.length > 0) params.references = refs;
+    }
+    if (isV2 && refVideoRaw && isPublicUrl(refVideoRaw.trim())) {
+      params.videos = [{ url: refVideoRaw.trim(), role: "reference_video" }];
     }
 
     setCurlState("copying");
@@ -408,6 +414,7 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
     { id: "lastFrame", label: "last frame" },
     { id: "refImages", label: "ref images (URLs)" },
     { id: "references", label: "ref assets (asset_ids)" },
+    { id: "refVideo", label: "ref video (URL)" },
   ],
   outputs: [{ id: "url", label: "url" }],
   defaults: {
@@ -434,6 +441,7 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
       inputs.lastFrame ?? "",
       inputs.refImages ?? "",
       inputs.references ?? "",
+      inputs.refVideo ?? "",
     ].join("|"),
   execute: async ({ form, inputs, signal, onProgress, projectId }) => {
     const prompt = inputs.prompt?.trim();
@@ -500,6 +508,17 @@ export const videoGenSpec: NodeTypeSpec<VideoGenForm> = {
         .filter(Boolean)
         .map((r) => ({ role: "subject", ...parseAssetRef(r) }));
       if (refs.length > 0) body.references = refs;
+    }
+
+    // Reference video (Seedance 2.0 video-to-video). Feeds a clip — e.g. a
+    // deterministic 3D turntable — as a `reference_video` so Seedance renders
+    // a final polished pass guided by it.
+    if (isV2 && inputs.refVideo) {
+      const v = inputs.refVideo.trim();
+      if (!isPublicUrl(v)) {
+        throw new Error("The ref video must be a publicly accessible https:// URL.");
+      }
+      body.videos = [{ url: v, role: "reference_video" }];
     }
 
     // Derive mode for the draft record.

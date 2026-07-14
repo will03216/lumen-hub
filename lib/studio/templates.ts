@@ -903,6 +903,145 @@ const turntableExact: StudioTemplate = {
   },
 };
 
+const turntableToSeedance: StudioTemplate = {
+  id: "turntable-to-seedance",
+  name: "3D Turntable → Seedance (final)",
+  description:
+    "Full chain to a polished hero clip. Image → 3D builds the mesh, Turntable Video renders an exact 360° orbit, then that clip is fed to Seedance 2.0 as a reference video (video-to-video) so the model re-renders it with photoreal lighting, reflections, and cinematic depth. Needs Seed3D + BytePlus keys (and AK/SK/TOS bucket for uploads).",
+  badge: "3D→V",
+  order: 8,
+  build: (): CanvasShape => {
+    const tpImg = newId("tp-img");
+    const tpFinal = newId("tp-final");
+    const ig = newId("ig");
+    const i3d = newId("i3d");
+    const ttv = newId("ttv");
+    const vg = newId("vg");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: tpImg,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: {
+            form: textForm(
+              "A single modern sneaker centered on a plain seamless white studio background, product photography, soft even lighting, no props, sharp focus, full object visible",
+            ),
+          },
+        },
+        {
+          id: ig,
+          type: "imageGen",
+          position: POS(380, -40),
+          data: { form: imageForm() },
+        },
+        {
+          id: i3d,
+          type: "imageTo3D",
+          position: POS(760, 0),
+          data: {
+            form: {
+              subdivision: "high",
+              frames: 4,
+              size: 768,
+              background: "#ffffff",
+            },
+          },
+        },
+        {
+          id: ttv,
+          type: "turntableVideo",
+          position: POS(1160, -40),
+          data: {
+            form: {
+              fps: 24,
+              duration: 3,
+              size: 768,
+              background: "#ffffff",
+              direction: "cw",
+            },
+          },
+        },
+        {
+          id: tpFinal,
+          type: "textPrompt",
+          position: POS(1160, 460),
+          data: {
+            form: textForm(
+              "Photoreal premium product hero: the product rotates on a turntable in a dark studio, cinematic key light with soft reflections on a glossy floor, subtle rim light, shallow depth of field, elegant commercial look, smooth continuous rotation",
+            ),
+          },
+        },
+        {
+          id: vg,
+          type: "videoGen",
+          // Seedance 2.0 (DEFAULT_VIDEO_MODEL_ID) — required for reference_video.
+          position: POS(1560, 160),
+          data: {
+            form: {
+              ...videoForm(),
+              ratio: "1:1",
+              duration: 5,
+            },
+          },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1960, 160),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${tpImg}-${ig}`,
+          source: tpImg,
+          sourceHandle: "prompt",
+          target: ig,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${ig}-${i3d}`,
+          source: ig,
+          sourceHandle: "url",
+          target: i3d,
+          targetHandle: "image",
+        },
+        {
+          id: `${i3d}-${ttv}`,
+          source: i3d,
+          sourceHandle: "mesh",
+          target: ttv,
+          targetHandle: "mesh",
+        },
+        // The hand-off: exact turntable clip → Seedance reference video.
+        {
+          id: `${ttv}-${vg}-refvideo`,
+          source: ttv,
+          sourceHandle: "url",
+          target: vg,
+          targetHandle: "refVideo",
+        },
+        {
+          id: `${tpFinal}-${vg}`,
+          source: tpFinal,
+          sourceHandle: "prompt",
+          target: vg,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${vg}-${pv}`,
+          source: vg,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
@@ -911,6 +1050,7 @@ export const TEMPLATES: readonly StudioTemplate[] = [
   turntable3D,
   turntable360R2V,
   turntableExact,
+  turntableToSeedance,
   articleNarration,
   referenceCreativePackage,
 ] as const;

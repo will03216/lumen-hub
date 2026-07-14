@@ -128,6 +128,13 @@ Three ways to turn the mesh into a video, in increasing consistency:
 Pick **Exact** when perfect consistency matters more than photoreal lighting;
 pick **R2V** when you want Seedance's realism and can tolerate some variance.
 
+### Best of both — turntable → Seedance final pass
+The Video Gen node has a **`ref video`** input (Seedance 2.0 `reference_video`,
+video-to-video). The **3D Turntable → Seedance (final)** template feeds the
+*exact* turntable clip into it, so Seedance re-renders the guaranteed-consistent
+orbit with photoreal lighting/reflections — deterministic geometry, generative
+polish. Chain: `Image Gen → Image → 3D → Turntable Video → Video Gen (refVideo) → Preview`.
+
 ### Turntable Video node (exact path)
 Input `mesh` (the Image → 3D `glb` output). Renders `fps × duration` frames
 covering `[0°, 360°)` in the browser, POSTs them to
