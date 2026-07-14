@@ -42,6 +42,7 @@ export const NODE_TYPE_IDS = [
   "videoUpscale",
   "urlInput",
   "videoStyleExtract",
+  "imageTo3D",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 

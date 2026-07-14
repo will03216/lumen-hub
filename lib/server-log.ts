@@ -35,7 +35,9 @@ export type RouteTag =
   | "video.enhance"
   | "video.enhance.poll"
   | "article-to-prompt"
-  | "optimize-prompt";
+  | "optimize-prompt"
+  | "model3d.create"
+  | "model3d.poll";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,
  *  but we fall back to `console.error` with a space-separated fallback

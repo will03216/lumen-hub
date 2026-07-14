@@ -40,6 +40,7 @@ import { VideoStitchNode } from "./nodes/video-stitch-node";
 import { VideoUpscaleNode } from "./nodes/video-upscale-node";
 import { UrlInputNode } from "./nodes/url-input-node";
 import { VideoStyleExtractNode } from "./nodes/video-style-extract-node";
+import { ImageTo3DNode } from "./nodes/image-to-3d-node";
 import { getNodeSpec } from "./nodes/registry";
 import { NodePalette } from "./node-palette";
 import { Toolbar } from "./toolbar";
@@ -69,6 +70,7 @@ const nodeTypes: NodeTypes = {
   videoUpscale: VideoUpscaleNode,
   urlInput: UrlInputNode,
   videoStyleExtract: VideoStyleExtractNode,
+  imageTo3D: ImageTo3DNode,
 };
 
 /** Build the `data` envelope for a freshly-instantiated node, seeded with

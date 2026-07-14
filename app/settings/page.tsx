@@ -11,6 +11,7 @@ const FIELD_TO_PROVIDER = {
   bytelusSk:          'byteplus_sk',
   byteplusTosBucket:  'byteplus_tos_bucket',
   byteplusMediakitKey: 'byteplus_mediakit_key',
+  seed3dApiKey:       'seed3d',
 } as const
 
 type FieldId = keyof typeof FIELD_TO_PROVIDER
@@ -56,6 +57,12 @@ const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[
     placeholder: 'mk-...',
     hint: 'console.byteplus.com → AI MediaKit → API Keys. Enables the Upscale & Enhance node.',
   },
+  {
+    id: 'seed3dApiKey',
+    label: 'Seed3D 2.0 API Key (optional)',
+    placeholder: 'ark-...',
+    hint: 'ark.cn-beijing.volces.com (China region) → API Keys. Enables the Image → 3D node in Studio.',
+  },
 ]
 
 type Hints = Partial<Record<Provider, string | null>>
@@ -77,11 +84,11 @@ function SettingsForm() {
   const isSetup = searchParams.get('setup') === '1'
 
   const [values, setValues] = useState<Record<FieldId, string>>({
-    byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '',
+    byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '', seed3dApiKey: '',
   })
   const [hints, setHints] = useState<Hints>({})
   const [visible, setVisible] = useState<Record<FieldId, boolean>>({
-    byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false, byteplusMediakitKey: false,
+    byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false, byteplusMediakitKey: false, seed3dApiKey: false,
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Provider | null>(null)
@@ -148,7 +155,7 @@ function SettingsForm() {
         showToast('error', error ?? 'Failed to save keys.')
         return
       }
-      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '' })
+      setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '', seed3dApiKey: '' })
       const fresh = await loadHints()
       if (isSetup) {
         if (allRequiredSaved(fresh)) { await enterApp(); return }

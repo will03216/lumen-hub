@@ -15,6 +15,10 @@ export type UserKeys = {
   fal?: string
   minimax?: string
   minimaxGroupId?: string
+  /** Seed3D 2.0 (image-to-3D) — optional provider on the China Ark region.
+   *  Distinct credential + endpoint from `byteplus`; lib/seed3d.ts resolves
+   *  this first and falls back to SEED3D_API_KEY (env) for local dev. */
+  seed3d?: string
 }
 
 /**
@@ -55,6 +59,7 @@ export async function getUserKeys(): Promise<UserKeys> {
           case 'fal':              keys.fal = plain;             break
           case 'minimax':          keys.minimax = plain;         break
           case 'minimax_group_id': keys.minimaxGroupId = plain;  break
+          case 'seed3d':           keys.seed3d = plain;          break
         }
       } catch {
         // Corrupted or mis-keyed row — skip silently, fall back to env var
