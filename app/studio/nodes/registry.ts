@@ -32,6 +32,7 @@ import { videoUpscaleSpec } from "./video-upscale-node";
 import { urlInputSpec } from "./url-input-node";
 import { videoStyleExtractSpec } from "./video-style-extract-node";
 import { imageTo3DSpec } from "./image-to-3d-node";
+import { turntableVideoSpec } from "./turntable-video-node";
 
 /**
  * The registry is the type-erasure boundary.
@@ -69,6 +70,7 @@ const REGISTRY: Record<NodeTypeId, AnyNodeSpec> = {
   urlInput: urlInputSpec,
   videoStyleExtract: videoStyleExtractSpec,
   imageTo3D: imageTo3DSpec,
+  turntableVideo: turntableVideoSpec,
 };
 
 export function getNodeSpec(type: string | undefined): AnyNodeSpec | undefined {

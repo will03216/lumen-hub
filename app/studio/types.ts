@@ -43,6 +43,7 @@ export const NODE_TYPE_IDS = [
   "urlInput",
   "videoStyleExtract",
   "imageTo3D",
+  "turntableVideo",
 ] as const;
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 

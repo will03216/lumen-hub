@@ -802,6 +802,107 @@ const turntable360R2V: StudioTemplate = {
   },
 };
 
+const turntableExact: StudioTemplate = {
+  id: "turntable-exact",
+  name: "3D Turntable — Exact (deterministic)",
+  description:
+    "Perfect-consistency 360°. Image → 3D builds the mesh, then Turntable Video renders it from every angle and ffmpeg-stitches an exact orbit mp4 — the SAME mesh from a rotating camera, so zero drift and a seamless loop. No Seedance in the loop; use this when consistency beats photoreal lighting. Needs a Seed3D key in Settings.",
+  badge: "EXACT",
+  order: 7,
+  build: (): CanvasShape => {
+    const tpImg = newId("tp-img");
+    const ig = newId("ig");
+    const i3d = newId("i3d");
+    const ttv = newId("ttv");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: tpImg,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: {
+            form: textForm(
+              "A single modern sneaker centered on a plain seamless white studio background, product photography, soft even lighting, no props, sharp focus, full object visible",
+            ),
+          },
+        },
+        {
+          id: ig,
+          type: "imageGen",
+          position: POS(380, -40),
+          data: { form: imageForm() },
+        },
+        {
+          id: i3d,
+          type: "imageTo3D",
+          position: POS(760, 0),
+          data: {
+            // Preview frames only — the mesh output is what feeds the video.
+            form: {
+              subdivision: "high",
+              frames: 4,
+              size: 768,
+              background: "#ffffff",
+            },
+          },
+        },
+        {
+          id: ttv,
+          type: "turntableVideo",
+          position: POS(1160, 40),
+          data: {
+            form: {
+              fps: 24,
+              duration: 3,
+              size: 768,
+              background: "#ffffff",
+              direction: "cw",
+            },
+          },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1560, 40),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${tpImg}-${ig}`,
+          source: tpImg,
+          sourceHandle: "prompt",
+          target: ig,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${ig}-${i3d}`,
+          source: ig,
+          sourceHandle: "url",
+          target: i3d,
+          targetHandle: "image",
+        },
+        // The deterministic bit: mesh → Turntable Video (ffmpeg stitch).
+        {
+          id: `${i3d}-${ttv}`,
+          source: i3d,
+          sourceHandle: "mesh",
+          target: ttv,
+          targetHandle: "mesh",
+        },
+        {
+          id: `${ttv}-${pv}`,
+          source: ttv,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
@@ -809,6 +910,7 @@ export const TEMPLATES: readonly StudioTemplate[] = [
   imageToVideo,
   turntable3D,
   turntable360R2V,
+  turntableExact,
   articleNarration,
   referenceCreativePackage,
 ] as const;

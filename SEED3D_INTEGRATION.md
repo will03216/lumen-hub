@@ -82,8 +82,10 @@ Notes verified against the live API:
 | `app/api/model3d/[id]/route.ts` | `GET` — poll a task. |
 | `app/api/model3d/mesh/route.ts` | `GET ?u=<zip url>` — fetch + unzip the archive, stream the `.glb` same-origin (`model/gltf-binary`). Host-allowlisted (same guard as `/api/media`). |
 | `app/api/model3d/upload-frame/route.ts` | `POST` — publish one rendered frame (`data:` URL) to the user's TOS bucket → public URL. |
+| `app/api/model3d/turntable-video/route.ts` | `POST` (multipart) — ffmpeg-stitch an ordered frame sequence into a `libx264` mp4 → TOS. The deterministic path. |
 | `lib/studio/turntable.ts` | Client three.js renderer: loads the GLB, PBR-lit orbit, captures N JPEG frames. `three` is dynamically imported so it stays out of the main bundle. |
 | `app/studio/nodes/image-to-3d-node.tsx` | The **Image → 3D** canvas node (component + spec + execute). |
+| `app/studio/nodes/turntable-video-node.tsx` | The **Turntable Video** node (deterministic 360° mp4 from a mesh). |
 
 ### Modified
 
@@ -115,14 +117,23 @@ render `size` (512/768/1024), `background` color.
 | `frames` | All frame URLs (newline-joined) → for R2V / reference images |
 | `glb` | Same-origin GLB stream URL (download / preview) |
 
-Two ways to drive the video:
-- **~180° bookend** — wire `first frame` → Video Gen `image` and `last frame`
-  → `lastFrame`. Seedance tweens between the two. Template: **3D Turntable (Seed3D)**.
-- **Full 360° (R2V)** — wire `frames` → Video Gen `refImages`. All turntable
-  views become Seedance 2.0 **reference images**, so the model sees the product
-  from every side and can render a consistent full rotation. Template:
-  **3D Turntable 360° (R2V)** — uses 4 orthogonal views (0/90/180/270°).
-  R2V requires **Seedance 2.0**; keep the reference count small (≤4–6).
+Three ways to turn the mesh into a video, in increasing consistency:
+
+| Mode | Wiring | Motion | Template |
+|------|--------|--------|----------|
+| **~180° bookend** | `first frame`→`image`, `last frame`→`lastFrame` on Video Gen | Seedance tweens the two keyframes | **3D Turntable (Seed3D)** |
+| **360° R2V** | `frames`→`refImages` on Video Gen | Seedance 2.0 sees every angle as reference images; rotation still prompt-driven | **3D Turntable 360° (R2V)** |
+| **Exact 360°** ⭐ | `glb`→`mesh` on **Turntable Video** | The mesh rendered from every angle, ffmpeg-stitched — **no generative model, zero drift, seamless loop** | **3D Turntable — Exact (deterministic)** |
+
+Pick **Exact** when perfect consistency matters more than photoreal lighting;
+pick **R2V** when you want Seedance's realism and can tolerate some variance.
+
+### Turntable Video node (exact path)
+Input `mesh` (the Image → 3D `glb` output). Renders `fps × duration` frames
+covering `[0°, 360°)` in the browser, POSTs them to
+`/api/model3d/turntable-video`, and ffmpeg assembles a `libx264` mp4 uploaded to
+TOS. Form: `fps`, `duration`, `size`, `background`, `direction` (cw/ccw).
+Requires the user's AK/SK/TOS bucket (for the mp4 upload).
 
 ---
 
@@ -186,9 +197,9 @@ signed-in browser session and were left for interactive testing.
 
 - **360° via R2V is prompt-driven.** The R2V path gives Seedance every angle as
   reference images, but the *rotation itself* still comes from the motion prompt
-  — Seedance has no explicit "rotate exactly 360°" control, so results vary. For
-  a guaranteed mechanical turntable, stitching the rendered frames directly into
-  a clip (they already cover 360°) is an alternative worth exploring.
+  — Seedance has no explicit "rotate exactly 360°" control, so results vary. The
+  **Exact** mode (Turntable Video node) sidesteps this entirely by stitching the
+  deterministic renders directly, when a mechanically-perfect orbit is the goal.
 - **Mesh persistence:** `/api/model3d/mesh` streams the GLB on demand by
   re-fetching the source zip, which expires after 24 h. Long-term, mirror the
   GLB to permanent storage (same pattern recommended for the Library).
