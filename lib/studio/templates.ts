@@ -1042,11 +1042,95 @@ const turntableToSeedance: StudioTemplate = {
   },
 };
 
+const digitalTwinExact: StudioTemplate = {
+  id: "digital-twin-exact",
+  name: "Digital Twin — Exact (no prompt)",
+  description:
+    "Prompt-free digital twin. Upload your own product packshot in the Asset node — no text, no VLM, no Seedance. Image → 3D builds the mesh and Turntable Video renders an exact deterministic 360° orbit. Maximum consistency, nothing to write. Needs a Seed3D key + AK/SK/TOS bucket.",
+  badge: "TWIN",
+  order: 5,
+  build: (): CanvasShape => {
+    const ap = newId("asset");
+    const i3d = newId("i3d");
+    const ttv = newId("ttv");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: ap,
+          type: "asset",
+          position: POS(0, 40),
+          data: { form: {} },
+        },
+        {
+          id: i3d,
+          type: "imageTo3D",
+          position: POS(380, 0),
+          data: {
+            form: {
+              subdivision: "high",
+              frames: 4,
+              size: 768,
+              background: "#ffffff",
+            },
+          },
+        },
+        {
+          id: ttv,
+          type: "turntableVideo",
+          position: POS(780, 40),
+          data: {
+            form: {
+              fps: 24,
+              duration: 3,
+              size: 768,
+              background: "#ffffff",
+              direction: "cw",
+            },
+          },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1180, 40),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        // Uploaded packshot (public TOS URL) → Image → 3D
+        {
+          id: `${ap}-${i3d}`,
+          source: ap,
+          sourceHandle: "url",
+          target: i3d,
+          targetHandle: "image",
+        },
+        // Mesh → deterministic Turntable Video
+        {
+          id: `${i3d}-${ttv}`,
+          source: i3d,
+          sourceHandle: "mesh",
+          target: ttv,
+          targetHandle: "mesh",
+        },
+        {
+          id: `${ttv}-${pv}`,
+          source: ttv,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
   quickClip,
   imageToVideo,
+  digitalTwinExact,
   turntable3D,
   turntable360R2V,
   turntableExact,
