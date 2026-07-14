@@ -549,11 +549,140 @@ const referenceCreativePackage: StudioTemplate = {
   },
 };
 
+const turntable3D: StudioTemplate = {
+  id: "turntable-3d",
+  name: "3D Turntable (Seed3D)",
+  description:
+    "Product image → Seed3D 2.0 mesh → client turntable render → orbit video. Image Gen makes a clean product still, Image → 3D reconstructs it and emits first/last frames, Video Gen animates the orbit. Needs a Seed3D key in Settings.",
+  badge: "3D",
+  order: 5,
+  build: (): CanvasShape => {
+    const tpImg = newId("tp-img");
+    const tpMotion = newId("tp-motion");
+    const ig = newId("ig");
+    const i3d = newId("i3d");
+    const vg = newId("vg");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: tpImg,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: {
+            form: textForm(
+              "A single modern sneaker centered on a plain seamless white studio background, product photography, soft even lighting, no props, sharp focus, full object visible",
+            ),
+          },
+        },
+        {
+          id: ig,
+          type: "imageGen",
+          position: POS(380, -40),
+          data: { form: imageForm() },
+        },
+        {
+          id: i3d,
+          type: "imageTo3D",
+          position: POS(760, 0),
+          data: {
+            form: {
+              subdivision: "high",
+              frames: 8,
+              size: 768,
+              background: "#ffffff",
+            },
+          },
+        },
+        {
+          id: tpMotion,
+          type: "textPrompt",
+          position: POS(760, 460),
+          data: {
+            form: textForm(
+              "Smooth slow turntable orbit around the product, seamless rotation, clean studio lighting, fixed framing",
+            ),
+          },
+        },
+        {
+          id: vg,
+          type: "videoGen",
+          position: POS(1160, 160),
+          data: {
+            form: {
+              ...videoForm(),
+              ratio: "1:1",
+              duration: 5,
+            },
+          },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1560, 160),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        // Product prompt → Image Gen
+        {
+          id: `${tpImg}-${ig}`,
+          source: tpImg,
+          sourceHandle: "prompt",
+          target: ig,
+          targetHandle: "prompt",
+        },
+        // Image (public TOS URL) → Image → 3D
+        {
+          id: `${ig}-${i3d}`,
+          source: ig,
+          sourceHandle: "url",
+          target: i3d,
+          targetHandle: "image",
+        },
+        // Turntable first frame → Video Gen first frame
+        {
+          id: `${i3d}-${vg}-first`,
+          source: i3d,
+          sourceHandle: "firstFrame",
+          target: vg,
+          targetHandle: "image",
+        },
+        // Turntable ~180° frame → Video Gen last frame (bookend orbit)
+        {
+          id: `${i3d}-${vg}-last`,
+          source: i3d,
+          sourceHandle: "lastFrame",
+          target: vg,
+          targetHandle: "lastFrame",
+        },
+        // Motion prompt → Video Gen
+        {
+          id: `${tpMotion}-${vg}`,
+          source: tpMotion,
+          sourceHandle: "prompt",
+          target: vg,
+          targetHandle: "prompt",
+        },
+        // Video → Preview
+        {
+          id: `${vg}-${pv}`,
+          source: vg,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
   quickClip,
   imageToVideo,
+  turntable3D,
   articleNarration,
   referenceCreativePackage,
 ] as const;
