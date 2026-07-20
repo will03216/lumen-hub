@@ -44,6 +44,83 @@ function isPublicUrl(s: string): boolean {
   );
 }
 
+/**
+ * Seed3D fetches the source image server-side, so it must be a *publicly
+ * reachable* https URL — it rejects same-origin `/library-cache/...` paths,
+ * `blob:`, and `data:` URIs. Asset / URL-Input outputs are those forms, so
+ * when the wired `image` isn't public we lift it to TOS first: read the
+ * bytes in the browser, re-encode to JPEG via a canvas (Seed3D only accepts
+ * jpeg/png/webp/bmp/tiff/gif — HEIC/AVIF would otherwise 400), then POST the
+ * data URI to /api/model3d/upload-frame which uploads it to the user's TOS
+ * bucket and returns a public https URL. Mirrors the stash'd upload flow
+ * but runs transparently on the wired input, with no UI upload button.
+ *
+ * A pre-existing public https URL is passed through untouched.
+ *
+ * The canvas is capped at MAX_CANVAS px on the long edge. Source images
+ * can be 4096×4096 (16.7Mpx) — at that size canvas.toDataURL blocks the
+ * main thread for many seconds (looks like an infinite spinner) and the
+ * resulting base64 is multi-MB. Capping to 2048² also keeps the output
+ * under BytePlus's per-image 4.62Mpx area ceiling, so the same image won't
+ * 400 downstream at Seed3D / Seedream.
+ */
+const MAX_CANVAS = 2048;
+
+async function ensurePublicImage(
+  imageUrl: string,
+  signal: AbortSignal | undefined,
+  onProgress?: (msg: string) => void,
+): Promise<string> {
+  if (isPublicUrl(imageUrl)) return imageUrl;
+
+  // Read arbitrary same-origin / blob / data URLs into a canvas-decodable
+  // image, then re-encode as JPEG. Seed3D's accepted set is exactly the set
+  // the browser canvas can decode + emit, so this both normalizes format
+  // (HEIC → JPEG) and produces a data URI for the TOS hop. A 20s ceiling
+  // so a stuck decode surfaces instead of spinning forever.
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      reject(new Error("timed out loading the wired image — pick a different source"));
+    }, 20000);
+    const done = (fn: () => void) => { clearTimeout(timer); fn(); };
+    img.crossOrigin = "anonymous";
+    img.onload = () => done(() => {
+      // Scale the long edge down to MAX_CANVAS so a 4096² source doesn't
+      // stall toDataURL and doesn't exceed the downstream area limit.
+      const scale = Math.min(1, MAX_CANVAS / Math.max(img.naturalWidth, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("could not get canvas 2d context"));
+      ctx.drawImage(img, 0, 0, w, h);
+      try {
+        resolve(canvas.toDataURL("image/jpeg", 0.92));
+      } catch (e) {
+        reject(new Error("could not encode image — try saving as jpg/png first"));
+      }
+    });
+    img.onerror = () => done(() =>
+      reject(new Error("could not load the wired image — pick a different source")));
+    img.src = imageUrl;
+  });
+
+  onProgress?.("Publishing source image to TOS…");
+  const up = await fetch("/api/model3d/upload-frame", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataUrl }),
+    signal,
+  });
+  const j = await up.json();
+  if (!up.ok) throw new Error(j?.error ?? "source image upload failed");
+  if (!j.url) throw new Error("source image upload returned no url");
+  return j.url as string;
+}
+
 const SIZES = [512, 768, 1024] as const;
 
 export const ImageTo3DNode = memo(function ImageTo3DNode({
@@ -72,8 +149,8 @@ export const ImageTo3DNode = memo(function ImageTo3DNode({
   return (
     <NodeShell id={id} spec={imageTo3DSpec} data={d} selected={selected ?? false} width={300}>
       <div className="rounded-[8px] border border-border bg-panel p-2 font-mono text-[10px] leading-snug text-ink-dim">
-        Wire a public <span className="text-ink">image</span> URL. Generates a 3D
-        mesh, renders a turntable, and emits{" "}
+        Wire any <span className="text-ink">image</span> (Image Gen, Asset, or
+        URL). Generates a 3D mesh, renders a turntable, and emits{" "}
         <span className="text-ink">first / last frame</span> for Video Gen.
       </div>
 
@@ -150,7 +227,7 @@ export const imageTo3DSpec: NodeTypeSpec<ImageTo3DForm> = {
   type: "imageTo3D",
   label: "Image → 3D",
   description:
-    "Seed3D 2.0: turn a product image into a 3D mesh, render a turntable, and emit first/last frames for Video Gen. Needs a Seed3D key in Settings.",
+    "Seed3D 2.0: turn a product image into a 3D mesh, render a turntable, and emit first/last frames for Video Gen. Accepts Image Gen, Asset, or URL inputs — non-public sources are lifted to TOS first. Needs a Seed3D key in Settings.",
   inputs: [{ id: "image", label: "image" }],
   outputs: [
     { id: "firstFrame", label: "first frame" },
@@ -169,14 +246,14 @@ export const imageTo3DSpec: NodeTypeSpec<ImageTo3DForm> = {
       inputs.image ?? "",
     ].join("|"),
   execute: async ({ form, inputs, signal, onProgress }) => {
-    const imageUrl = inputs.image?.trim();
-    if (!imageUrl) throw new Error("Wire a public image URL to convert to 3D");
-    if (!isPublicUrl(imageUrl)) {
-      throw new Error(
-        "The image input must be a publicly accessible https:// URL — Seed3D " +
-          "fetches it server-side. Wire an Image Gen output (TOS URL), not a data URI.",
-      );
-    }
+    const wired = inputs.image?.trim();
+    if (!wired) throw new Error("Wire an image to convert to 3D");
+
+    // Asset / URL-Input outputs are same-origin `/library-cache/...` paths or
+    // data/blob URIs — not publicly fetchable. Lift to TOS first so Seed3D,
+    // which fetches the image server-side, can reach it. Public https URLs
+    // (e.g. an Image Gen TOS output) pass straight through.
+    const imageUrl = await ensurePublicImage(wired, signal, onProgress);
 
     // 1) Submit the image→3D task.
     onProgress?.("Submitting 3D task…");

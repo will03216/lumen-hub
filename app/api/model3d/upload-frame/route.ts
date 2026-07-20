@@ -64,6 +64,8 @@ export async function POST(req: NextRequest) {
   if (!bucket) return missingKeyResponse("byteplus_tos_bucket");
 
   const ext = contentType.split("/")[1]?.split("+")[0] || "jpg";
+  const uploadStart = Date.now();
+  console.log(`[model3d/upload-frame] PUT ${buffer.byteLength} bytes → ${bucket} (region ${process.env.MODELARK_TOS_REGION ?? "cn-beijing"})`);
   try {
     const url = await uploadToTos(
       buffer,
@@ -71,6 +73,7 @@ export async function POST(req: NextRequest) {
       `turntable-frame.${ext}`,
       { ak, sk, bucket },
     );
+    console.log(`[model3d/upload-frame] ✓ uploaded in ${((Date.now() - uploadStart) / 1000).toFixed(1)}s`);
     return NextResponse.json({ url }, { status: 201 });
   } catch (err) {
     const keyResp = keyErrorResponse(err);

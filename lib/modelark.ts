@@ -306,10 +306,18 @@ export async function uploadToTos(
 
   const url = `https://${host}${path}`;
 
-  // Use node:https directly to avoid Node's strict TLS validation issues
+  // Use node:https directly to avoid Node's strict TLS validation issues.
+  // A 60s ceiling: a same-region TOS PUT of a few MB returns in well under
+  // 10s (measured TLS handshake ~0.7s). Without a timeout a bucket/endpoint
+  // mismatch can leave the socket open indefinitely, which from the canvas
+  // looks like the node spinning forever on "Publishing source image to
+  // TOS…". Surfacing it as an error lets the user act instead of waiting.
   const { request } = await import("node:https");
   await new Promise<void>((resolve, reject) => {
     const parsed = new URL(url);
+    const timeout = setTimeout(() => {
+      req.destroy(new Error("TOS upload timed out after 60s — check that MODELARK_TOS_BUCKET/MODELARK_TOS_REGION match the bucket's actual region"));
+    }, 60000);
     const req = request(
       {
         hostname: parsed.hostname,
@@ -326,6 +334,7 @@ export async function uploadToTos(
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
         res.on("end", () => {
+          clearTimeout(timeout);
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             resolve();
           } else {
@@ -333,10 +342,10 @@ export async function uploadToTos(
             reject(new Error(`TOS upload failed (${res.statusCode}): ${body}`));
           }
         });
-        res.on("error", reject);
+        res.on("error", (err) => { clearTimeout(timeout); reject(err); });
       },
     );
-    req.on("error", reject);
+    req.on("error", (err) => { clearTimeout(timeout); reject(err); });
     req.write(fileBuffer);
     req.end();
   });
