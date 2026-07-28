@@ -21,13 +21,20 @@ const isAccessDeniedRoute = createRouteMatcher(['/not-authorized(.*)'])
 // them — an XHR should get clean JSON, not an HTML page.
 const isApiRoute = createRouteMatcher(['/api/(.*)'])
 
-// ── Access allowlist (opt-in) ───────────────────────────────────────────────
-// Limit the platform to internal staff (by email domain) plus specific
-// whitelisted customer emails. Read at runtime (Proxy runs in the Node.js
-// runtime), so updating the list only needs a container restart, no rebuild.
-//   ALLOWED_EMAIL_DOMAINS=bytedance.com
-//   ALLOWED_EMAILS=alice@customer.com,bob@partner.io
-// Leave BOTH unset to disable the gate (any authenticated user is allowed).
+// ── Access gate (opt-in) ────────────────────────────────────────────────────
+// Two ways in, checked together:
+//   1) Coarse env allowlist — internal staff by domain, plus specific emails.
+//        ALLOWED_EMAIL_DOMAINS=bytedance.com
+//        ALLOWED_EMAILS=alice@customer.com,bob@partner.io
+//      Read at process start, so changes need a container restart.
+//   2) Per-user grant in Clerk — set `{ "approved": true }` on the user's
+//      public metadata. Read per-request from the session token, so granting
+//      access is instant: no env edit, no restart, no redeploy.
+//
+// The gate is ON if either env list is non-empty OR REQUIRE_APPROVAL is set.
+// Set REQUIRE_APPROVAL=true to run purely on Clerk approvals (no env list) —
+// flip it on once, then manage every grant from the Clerk dashboard forever.
+// Leave all three unset to disable the gate (any authenticated user is allowed).
 function parseSet(raw: string | undefined): Set<string> {
   return new Set(
     (raw ?? '')
@@ -38,10 +45,11 @@ function parseSet(raw: string | undefined): Set<string> {
 }
 const ALLOWED_DOMAINS = parseSet(process.env.ALLOWED_EMAIL_DOMAINS)
 const ALLOWED_EMAILS = parseSet(process.env.ALLOWED_EMAILS)
-const allowlistActive = ALLOWED_DOMAINS.size > 0 || ALLOWED_EMAILS.size > 0
+const REQUIRE_APPROVAL = /^(1|true|yes|on)$/i.test(process.env.REQUIRE_APPROVAL ?? '')
+const gateActive = ALLOWED_DOMAINS.size > 0 || ALLOWED_EMAILS.size > 0 || REQUIRE_APPROVAL
 
+// Passes the gate via the coarse env allowlist (domain or explicit email).
 function emailAllowed(email: string | undefined): boolean {
-  if (!allowlistActive) return true // gate disabled
   if (!email) return false // fail closed: no verifiable email when the gate is on
   const e = email.toLowerCase()
   const domain = e.slice(e.lastIndexOf('@') + 1)
@@ -53,10 +61,13 @@ export const proxy = clerkMiddleware(async (auth, request) => {
 
   const { userId, sessionClaims } = await auth.protect()
 
-  // 1) Access allowlist — internal domains + whitelisted customer emails.
-  // Requires the Clerk session token to expose the email claim:
-  //   { "email": "{{user.primary_email_address}}" }
-  if (allowlistActive && !isAccessDeniedRoute(request) && !emailAllowed(sessionClaims?.email)) {
+  // 1) Access gate — coarse env allowlist OR a per-user Clerk grant.
+  // Requires the Clerk session token to expose both claims:
+  //   { "email": "{{user.primary_email_address}}",
+  //     "metadata": "{{user.public_metadata}}" }
+  const approved = sessionClaims?.metadata?.approved === true
+  const hasAccess = emailAllowed(sessionClaims?.email) || approved
+  if (gateActive && !isAccessDeniedRoute(request) && !hasAccess) {
     if (isApiRoute(request)) {
       return NextResponse.json({ error: 'access_denied' }, { status: 403 })
     }

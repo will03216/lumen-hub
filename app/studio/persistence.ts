@@ -31,6 +31,17 @@ export function loadCanvas(projectId: string): CanvasShape | null {
   return getProject(projectId)?.canvas ?? null;
 }
 
+// Last persisted shape per project, serialized. Lets saveCanvas skip a
+// write-through when the computed CanvasShape is byte-identical to what we
+// last saved. This matters during a run: the runner ticks `progress` on
+// every message, mutating node data and re-arming the autosave debounce —
+// but persistence strips those transient fields, so the persisted shape is
+// usually unchanged. Without this guard each tick fires a full-project
+// upsert to /api/studio/sync. Keyed by projectId so switching projects
+// can't cross-contaminate. In-memory only: a fresh load saves once, which
+// is correct.
+const lastSaved = new Map<string, string>();
+
 export function saveCanvas(
   projectId: string,
   nodes: Node[],
@@ -60,6 +71,13 @@ export function saveCanvas(
       targetHandle: e.targetHandle ?? null,
     })),
   };
+
+  // Skip the write-through when nothing persisted actually changed, so
+  // transient progress ticks during a run don't fire redundant cloud syncs.
+  const serialized = JSON.stringify(canvas);
+  if (lastSaved.get(projectId) === serialized) return;
+  lastSaved.set(projectId, serialized);
+
   updateProject(projectId, { canvas });
 }
 
