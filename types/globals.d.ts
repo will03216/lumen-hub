@@ -14,6 +14,10 @@ declare global {
     email?: string
     metadata?: {
       onboarded?: boolean
+      /** Per-user access grant. Set `{ "approved": true }` in the user's
+       *  Clerk public metadata to allow an individual email past the access
+       *  gate without touching ALLOWED_EMAILS/env or restarting. */
+      approved?: boolean
     }
   }
 }
