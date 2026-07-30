@@ -80,6 +80,53 @@ export function addAssetGroup(input: {
   return group;
 }
 
+/**
+ * Bulk upsert — one commit for the whole batch.
+ *
+ * addAssetGroup() commits per call, and commit() both serialises the entire
+ * store into localStorage and notifies every listener. Looping it over a sync
+ * response is O(n²): a 5k-group account stringifies ~3 GB and forces 5k
+ * synchronous localStorage writes plus 5k re-renders, which locks the tab.
+ * Callers importing a whole page of groups must use this instead.
+ */
+export function addAssetGroups(
+  inputs: Array<{
+    byteplusGroupId: string;
+    name: string;
+    description?: string;
+    /** BytePlus CreateTime (ISO 8601), when the server supplied it. */
+    createTime?: string;
+  }>,
+): AssetGroup[] {
+  if (inputs.length === 0) return [];
+  const fallback = Date.now();
+  const store = getCached();
+  const groups = { ...store.groups };
+  const added: AssetGroup[] = [];
+  for (const input of inputs) {
+    const id = input.byteplusGroupId;
+    if (!id) continue;
+    // Order on the group's real creation time. Stamping Date.now() per batch
+    // instead made sort order depend on which page a group happened to arrive
+    // on, so every backfilled page jumped to the top and the list reshuffled
+    // under the user's cursor mid-click.
+    const parsed = input.createTime ? Date.parse(input.createTime) : NaN;
+    const createdAt = Number.isNaN(parsed)
+      ? groups[id]?.createdAt ?? fallback
+      : parsed;
+    groups[id] = {
+      id,
+      byteplusGroupId: id,
+      name: input.name,
+      description: input.description,
+      createdAt,
+    };
+    added.push(groups[id]);
+  }
+  commit({ ...store, groups });
+  return added;
+}
+
 export function removeAssetGroup(id: string): void {
   const store = getCached();
   const { [id]: _, ...rest } = store.groups;
@@ -87,7 +134,11 @@ export function removeAssetGroup(id: string): void {
 }
 
 export function listAssetGroups(): AssetGroup[] {
-  return Object.values(getCached().groups).sort((a, b) => b.createdAt - a.createdAt);
+  // Tie-break on id so equal timestamps can't reorder between renders —
+  // Object.values() order is not something the list should depend on.
+  return Object.values(getCached().groups).sort(
+    (a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
+  );
 }
 
 export function getAssetGroup(id: string): AssetGroup | null {
@@ -114,4 +165,21 @@ export function getAssetGroupsSnapshot(): AssetGroup[] {
 const SERVER_SNAPSHOT: AssetGroup[] = [];
 export function getAssetGroupsServerSnapshot(): AssetGroup[] {
   return SERVER_SNAPSHOT;
+}
+
+// ─────────────────────────── Test-only reset ──────────────────────────
+// Exposed so the unit tests can isolate each case without leaking state
+// through the module-level cache. Mirrors lib/library/assets.ts.
+
+export function __resetForTests(): void {
+  cache = null;
+  snapshotCache = null;
+  listeners.clear();
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.removeItem(STORAGE_KEY());
+    } catch {
+      // ignore
+    }
+  }
 }

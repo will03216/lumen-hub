@@ -350,6 +350,9 @@ export type AssetGroupInfo = {
   groupId: string;
   name: string;
   description?: string;
+  /** BytePlus CreateTime (ISO 8601). The client sorts on this so list order is
+   *  identical no matter which page a group arrives on. */
+  createTime?: string;
 };
 
 export type AssetInfo = {
@@ -439,6 +442,7 @@ export async function listAssetGroups(
       groupId: String(g.Id ?? g.GroupId ?? ""),
       name: String(g.Name ?? ""),
       description: g.Description ? String(g.Description) : undefined,
+      createTime: g.CreateTime ? String(g.CreateTime) : undefined,
     })),
     total: result.TotalCount ?? raw.length,
   };

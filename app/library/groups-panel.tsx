@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   type AssetGroup,
   addAssetGroup,
+  addAssetGroups,
   getAssetGroupsServerSnapshot,
   getAssetGroupsSnapshot,
   subscribeAssetGroups,
@@ -62,6 +63,8 @@ export function GroupsPanel() {
 
   const [creating, setCreating] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  /** True while pages 2..n are still being backfilled behind the rendered list. */
+  const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState("");
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId) ?? null;
@@ -73,21 +76,88 @@ export function GroupsPanel() {
       )
     : groups;
 
-  // Sync BytePlus groups into localStorage on mount
+  // Sync BytePlus groups into localStorage on mount.
+  //
+  // The route serves one page at a time. We render page 1 as soon as it lands,
+  // then backfill the remainder in the background — an account with thousands
+  // of groups otherwise leaves the panel blank for the whole walk.
   useEffect(() => {
+    const controller = new AbortController();
+
+    type GroupsPage = {
+      groups?: Array<{
+        groupId: string;
+        name: string;
+        description?: string;
+        createTime?: string;
+      }>;
+      total?: number;
+      hasMore?: boolean;
+    };
+
+    async function fetchPage(page: number): Promise<GroupsPage | null> {
+      const res = await fetch(`/api/modelark/groups?page=${page}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        // Surface the failure instead of bailing silently — otherwise a
+        // missing key or an upstream error is indistinguishable from an
+        // account that genuinely has no groups.
+        const detail = await res.json().catch(() => null) as { error?: string } | null;
+        setSyncError(detail?.error ?? `Failed to load groups (HTTP ${res.status})`);
+        return null;
+      }
+      return await res.json() as GroupsPage;
+    }
+
+    // One commit per page, never per group — commit() serialises the entire
+    // store and re-renders, so per-group calls here were O(n²).
+    function store(page: GroupsPage): number {
+      const incoming = (page.groups ?? []).filter((g) => g.groupId);
+      addAssetGroups(
+        incoming.map((g) => ({
+          byteplusGroupId: g.groupId,
+          name: g.name,
+          description: g.description,
+          createTime: g.createTime,
+        })),
+      );
+      return incoming.length;
+    }
+
     async function syncGroups() {
       try {
-        const res = await fetch("/api/modelark/groups");
-        if (!res.ok) return;
-        const data = await res.json() as { groups?: Array<{ groupId: string; name: string; description?: string }> };
-        for (const g of data.groups ?? []) {
-          if (g.groupId) addAssetGroup({ byteplusGroupId: g.groupId, name: g.name, description: g.description });
+        const first = await fetchPage(1);
+        if (!first) return;
+        const seen = store(first);
+        setSyncing(!!first.hasMore);
+
+        // Backfill pages 2..n. Sequential on purpose: this is a background
+        // top-up behind an already-rendered list, and firing 50+ concurrent
+        // signed requests at the upstream API risks rate limiting.
+        let page = 2;
+        let loaded = seen;
+        const total = first.total ?? loaded;
+        while (!controller.signal.aborted && loaded < total) {
+          const next = await fetchPage(page);
+          if (!next) break;
+          const added = store(next);
+          if (added === 0) break; // defensive: never spin on an empty page
+          loaded += added;
+          if (!next.hasMore) break;
+          page++;
         }
       } catch (e) {
+        // An abort is just unmount, not a failure worth showing.
+        if (controller.signal.aborted) return;
         setSyncError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!controller.signal.aborted) setSyncing(false);
       }
     }
+
     void syncGroups();
+    return () => controller.abort();
   }, []);
 
   // Auto-select first group when groups load and no URL param is present
@@ -107,6 +177,13 @@ export function GroupsPanel() {
             Groups
             {groups.length > 0 && (
               <span className="ml-1.5 text-ink-mute">({groups.length})</span>
+            )}
+            {/* The count climbs while the backfill runs — say so, so a partial
+                list doesn't read as the complete one. */}
+            {syncing && (
+              <span className="ml-1.5 text-ink-mute" aria-live="polite">
+                loading…
+              </span>
             )}
           </span>
           <button
