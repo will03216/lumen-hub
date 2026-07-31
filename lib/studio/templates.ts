@@ -567,28 +567,28 @@ const TSHIRT_FAN_OUT_SHOTS: ReadonlyArray<{
   {
     key: "threequarter",
     label: "Three-quarter",
-    size: "2160x3840",
+    size: "1440x2560",
     prompt:
       "Same garment and same model as the reference image, turned to a three-quarter angle facing camera left. Full-body studio shot, even softbox lighting, seamless light-grey backdrop, relaxed natural stance. Keep the garment's cut, colour and print identical to the reference. Photographic e-commerce look, no text, no graphics, no watermark.",
   },
   {
     key: "walking",
     label: "Walking",
-    size: "2160x3840",
+    size: "1440x2560",
     prompt:
       "Same garment and same model as the reference image, captured mid-stride walking toward camera. Full-body shot with natural fabric movement and a slight motion feel in the hem and sleeves. Seamless light-grey backdrop, soft key light. Keep the garment's cut, colour and print identical to the reference. No text, no graphics, no watermark.",
   },
   {
     key: "handsinpocket",
     label: "Hands in pockets",
-    size: "2160x3840",
+    size: "1440x2560",
     prompt:
       "Same garment and same model as the reference image, standing square to camera with both hands in pockets and shoulders relaxed. Full-body editorial stance, soft directional key light with gentle falloff, seamless light-grey backdrop. Keep the garment's cut, colour and print identical to the reference. No text, no graphics, no watermark.",
   },
   {
     key: "lowangle",
     label: "Low angle",
-    size: "2160x3840",
+    size: "1440x2560",
     prompt:
       "Same garment and same model as the reference image, shot from a low camera angle looking slightly upward for a confident hero perspective. Full-body framing, subtle wide-lens feel, seamless light-grey backdrop, crisp studio lighting. Keep the garment's cut, colour and print identical to the reference. No text, no graphics, no watermark.",
   },
@@ -602,7 +602,7 @@ const TSHIRT_FAN_OUT_SHOTS: ReadonlyArray<{
   {
     key: "backview",
     label: "Back view",
-    size: "2160x3840",
+    size: "1440x2560",
     prompt:
       "Same garment and same model as the reference image, photographed from directly behind to show the back panel. Full-body shot, shoulder seams and back hem clearly readable, seamless light-grey backdrop, even studio lighting. Keep the garment's cut, colour and any back print identical to the reference. No text, no graphics, no watermark.",
   },
@@ -655,7 +655,7 @@ const garmentShotPackage: StudioTemplate = {
         id: hero,
         type: "imageGen",
         position: POS(440, 240),
-        data: { form: { ...imageForm(), size: "2160x3840" } },
+        data: { form: { ...imageForm(), size: "1440x2560" } },
       },
       {
         id: heroPv,
