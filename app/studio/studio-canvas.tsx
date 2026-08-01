@@ -46,7 +46,12 @@ import { Toolbar } from "./toolbar";
 import { runGraph, runUpstreamOf } from "./runner";
 import { saveCanvas, clearCanvas } from "./persistence";
 import { RunnerContext } from "./runner-context";
-import { getProject, updateProject } from "@/lib/studio/projects";
+import {
+  getProject,
+  isCloudHydrated,
+  subscribeProjects,
+  updateProject,
+} from "@/lib/studio/projects";
 import type { StudioNodeData } from "./types";
 
 const nodeTypes: NodeTypes = {
@@ -83,26 +88,32 @@ function makeDefaultData(type: string): StudioNodeData<unknown> {
   };
 }
 
-type Phase = "missing" | "ready";
+/** "loading" is the state that used to be missing entirely: the store said
+ *  no project, but the answer wasn't trustworthy yet. */
+type Phase = "loading" | "missing" | "ready";
 
-/** One-shot lazy hydration of the canvas from the persisted project.
+/** Build canvas state from the persisted project, or null when the store
+ *  has no such project.
  *
  * Computed inside a `useState` initializer (not a `useEffect`) so we
  * never trigger the cascading-renders lint and the user lands on the
  * fully-populated graph in a single commit. Safe because this component
  * only mounts on the client (see studio-canvas-loader.tsx — `ssr: false`),
  * so calling `getProject` (which touches localStorage) at first-render
- * time is well-defined. */
+ * time is well-defined.
+ *
+ * A null result is NOT proof the project is gone. This chunk is lazy and
+ * can render before Clerk resolves, and until it does, localStorage keys
+ * aren't user-scoped (lib/storage-user.ts) — so the read lands in the wrong
+ * bucket and finds nothing. Callers must wait for isCloudHydrated() before
+ * treating null as 404; see the re-hydrate subscription below. */
 function hydrate(projectId: string): {
-  phase: Phase;
   name: string;
   nodes: Node[];
   edges: Edge[];
-} {
+} | null {
   const project = getProject(projectId);
-  if (!project) {
-    return { phase: "missing", name: "Untitled", nodes: [], edges: [] };
-  }
+  if (!project) return null;
   const nodes = project.canvas.nodes.map<Node>((n) => ({
     id: n.id,
     type: n.type,
@@ -130,15 +141,45 @@ function hydrate(projectId: string): {
     sourceHandle: e.sourceHandle ?? undefined,
     targetHandle: e.targetHandle ?? undefined,
   }));
-  return { phase: "ready", name: project.name, nodes, edges };
+  return { name: project.name, nodes, edges };
 }
 
 function StudioCanvasInner({ projectId }: { projectId: string }) {
   const [initial] = useState(() => hydrate(projectId));
-  const [phase] = useState<Phase>(initial.phase);
-  const [name, setName] = useState(initial.name);
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
+  const [phase, setPhase] = useState<Phase>(() =>
+    initial ? "ready" : isCloudHydrated() ? "missing" : "loading",
+  );
+  const [name, setName] = useState(initial?.name ?? "Untitled");
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial?.nodes ?? []);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial?.edges ?? []);
+
+  // Re-read the store until the project shows up or hydration settles.
+  //
+  // The first read can miss for reasons that have nothing to do with the
+  // project existing: this chunk is lazy-loaded and may render before Clerk
+  // resolves, and until it does, storage keys are unscoped. hydrateFromCloud()
+  // then pulls the project from the server and notifies — previously nobody
+  // was listening, so the canvas sat on a 404 for a project that had just
+  // arrived. Subscribing is what makes a refresh reliable.
+  useEffect(() => {
+    if (phase === "ready") return;
+    const check = () => {
+      const next = hydrate(projectId);
+      if (next) {
+        setName(next.name);
+        setNodes(next.nodes);
+        setEdges(next.edges);
+        setPhase("ready");
+      } else if (isCloudHydrated()) {
+        // Settled and still absent — now 404 is the honest answer.
+        setPhase("missing");
+      }
+    };
+    const unsubscribe = subscribeProjects(check);
+    // Hydration can complete between the render above and this subscribe.
+    check();
+    return unsubscribe;
+  }, [phase, projectId, setNodes, setEdges]);
   const [running, setRunning] = useState(false);
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -325,6 +366,16 @@ function StudioCanvasInner({ projectId }: { projectId: string }) {
     setEdges([]);
     clearCanvas(projectId);
   }, [projectId, running, setNodes, setEdges]);
+
+  // Not found *yet*. Showing 404 here is what made a refresh look broken for
+  // a project that was about to arrive from the server.
+  if (phase === "loading") {
+    return (
+      <div className="flex h-full w-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.16em] text-ink-dim">
+        Restoring canvas …
+      </div>
+    );
+  }
 
   if (phase === "missing") {
     return (

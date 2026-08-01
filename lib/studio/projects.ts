@@ -117,6 +117,27 @@ function writeStore(store: StoreShape): void {
 
 let hydrated = false;
 
+/**
+ * True once the cloud pull has been attempted (or was determined to be
+ * unnecessary). Consumers need this to tell "your project isn't loaded yet"
+ * from "your project doesn't exist" — before this flips, a store miss means
+ * nothing, because localStorage keys aren't even user-scoped yet.
+ */
+export function isCloudHydrated(): boolean {
+  return hydrated;
+}
+
+/**
+ * Mark hydration settled without pulling — for the signed-out case, where
+ * there is nothing to fetch and waiting forever would strand the UI on a
+ * spinner.
+ */
+export function markCloudHydrated(): void {
+  if (hydrated) return;
+  hydrated = true;
+  listeners.forEach((cb) => cb());
+}
+
 function pushProject(p: Project): void {
   if (typeof window !== "undefined" && hydrated) void syncProjectUpsert(p);
 }
@@ -154,6 +175,10 @@ export async function hydrateFromCloud(): Promise<void> {
   }
 
   hydrated = true;
+  // Wake subscribers even when the pull returned nothing to merge — a waiting
+  // canvas needs to know the answer is settled so it can stop showing a
+  // spinner and commit to "missing".
+  listeners.forEach((cb) => cb());
 
   // Back up records the server is missing or that are newer locally. Safe even
   // if the pull failed (remote === null): the server's updated_at guard rejects
