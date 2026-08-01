@@ -44,6 +44,12 @@ services:
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       MINIMAX_GROUP_ID: ${MINIMAX_GROUP_ID:-}
       FAL_API_KEY: ${FAL_API_KEY:-}
+    volumes:
+      # Mirrored CDN assets live on the container filesystem, so a rebuild
+      # threw them away and the Library filled with broken thumbnails again —
+      # the exact thing the mirror route exists to prevent. Keep them in a
+      # named volume so they outlive the container.
+      - library_cache:/app/public/library-cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,3 +62,4 @@ services:
 
 volumes:
   postgres_data:
+  library_cache:

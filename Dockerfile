@@ -45,6 +45,14 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+# /api/library/mirror streams BytePlus CDN assets to public/library-cache at
+# runtime so the Library survives the signed URLs expiring. COPY leaves
+# /app/public owned by root, and the container drops to `nextjs` below — so
+# every write failed with EACCES and the route answered 502 "stream failed".
+# Own the directory before dropping privileges.
+RUN mkdir -p /app/public/library-cache \
+ && chown -R nextjs:nodejs /app/public/library-cache
+
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
