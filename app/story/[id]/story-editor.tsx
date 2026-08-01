@@ -19,6 +19,7 @@ import {
   type SceneAssets,
 } from "@/lib/story/stories";
 import { splitStoryIntoScenes } from "@/lib/story/scene-split";
+import { looksLikeScript, parseScript, validateScript } from "@/lib/story/script-format";
 import { useStoryGeneration } from "@/lib/story/use-story-generation";
 import { DEFAULT_VIDEO_MODEL_ID } from "@/lib/studio/models";
 import { cn } from "@/lib/utils";
@@ -105,6 +106,11 @@ export function StoryEditor({ storyId }: { storyId: string }) {
     [arr[idx], arr[swap]] = [arr[swap], arr[idx]];
     save({ scenes: arr.map((s, i) => ({ ...s, index: i })) });
   }
+
+  const scriptDetected = React.useMemo(
+    () => (story ? looksLikeScript(story.prompt) : false),
+    [story],
+  );
 
   function handleBreakIntoScenes() {
     if (!story) return;
@@ -303,9 +309,11 @@ export function StoryEditor({ storyId }: { storyId: string }) {
                     Prompt error: {promptError}
                   </p>
                 )}
+                <ScriptFormatReport source={story.prompt} />
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px] text-ink-mute mr-auto">
                     {story.prompt.trim().split(/\s+/).filter(Boolean).length} words
+                    {scriptDetected && " · screenplay detected"}
                   </span>
                   {story.scenes.length > 0 && (
                     <Button
@@ -646,6 +654,73 @@ function SceneCard({
 }
 
 // ─────────────────────────── Helpers ──────────────────────────────────────
+
+/**
+ * Formatting problems in a screenplay, with line numbers.
+ *
+ * Only shown once the text actually reads as a script — nagging someone who
+ * pasted freeform prose about a missing slugline would be noise. Errors are
+ * fields the parser needs; warnings are things that degrade the output but
+ * still produce scenes.
+ */
+function ScriptFormatReport({ source }: { source: string }) {
+  const issues = React.useMemo(() => {
+    if (!looksLikeScript(source)) return null;
+    return validateScript(parseScript(source));
+  }, [source]);
+
+  if (!issues) return null;
+
+  const errors = issues.filter((i) => i.severity === "error");
+  const warnings = issues.filter((i) => i.severity === "warning");
+
+  if (errors.length === 0 && warnings.length === 0) {
+    return (
+      <p className="font-mono text-[9px] uppercase tracking-[0.10em] text-ok">
+        ✓ Script format valid
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-[10px] border border-border bg-panel px-3 py-2">
+      <p className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-dim">
+        Script format
+        {errors.length > 0 && (
+          <span className="ml-1.5 text-[oklch(0.78_0.18_25)]">
+            {errors.length} error{errors.length > 1 ? "s" : ""}
+          </span>
+        )}
+        {warnings.length > 0 && (
+          <span className="ml-1.5 text-[oklch(0.78_0.18_70)]">
+            {warnings.length} warning{warnings.length > 1 ? "s" : ""}
+          </span>
+        )}
+      </p>
+      <ul className="flex flex-col gap-1">
+        {issues.slice(0, 12).map((issue, i) => (
+          <li key={i} className="flex gap-2 text-[11px] leading-snug">
+            <span
+              className={
+                issue.severity === "error"
+                  ? "shrink-0 font-mono text-[9px] text-[oklch(0.78_0.18_25)]"
+                  : "shrink-0 font-mono text-[9px] text-[oklch(0.78_0.18_70)]"
+              }
+            >
+              {issue.line ? `L${issue.line}` : "—"}
+            </span>
+            <span className="text-ink-dim">{issue.message}</span>
+          </li>
+        ))}
+      </ul>
+      {issues.length > 12 && (
+        <p className="mt-1 font-mono text-[9px] text-ink-mute">
+          +{issues.length - 12} more
+        </p>
+      )}
+    </div>
+  );
+}
 
 function StatRow({ label, value, warn, ok }: { label: string; value: string; warn?: boolean; ok?: boolean }) {
   return (

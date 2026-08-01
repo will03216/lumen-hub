@@ -17,16 +17,62 @@
 
 import type { Scene } from "./stories";
 import { newSceneId } from "./stories";
+import {
+  looksLikeScript,
+  parseScript,
+  renderScenePrompt,
+  spokenWordCount,
+  type ParsedScene,
+} from "./script-format";
 
 const MIN_DURATION = 5;
 const MAX_DURATION = 15;
 const WORDS_PER_SECOND = 2.5;
+
+/**
+ * One scene per authored scene, when the input is a formatted script.
+ *
+ * A screenplay already declares its own scene boundaries, so guessing at them
+ * with paragraph and sentence heuristics throws away the structure the writer
+ * supplied — and splits a single scene across several clips, which is exactly
+ * what breaks shot-to-shot consistency.
+ */
+export function splitScriptIntoScenes(
+  source: string,
+  targetDuration = 60,
+  audio = false,
+): Scene[] {
+  const parsed = parseScript(source);
+  if (parsed.scenes.length === 0) return [];
+
+  const scenes = parsed.scenes.map((scene, i) =>
+    makeScene(renderScenePrompt(scene), i, estimateDuration(scene), audio),
+  );
+  return rebalance(scenes, targetDuration);
+}
+
+/**
+ * Duration from spoken dialogue where there is any, since delivery is what
+ * actually sets a shot's length. Action-only scenes fall back to their prose
+ * length, which is the best signal available.
+ */
+function estimateDuration(scene: ParsedScene): number {
+  const spoken = spokenWordCount(scene);
+  const words = spoken > 0 ? spoken : wordCount(renderScenePrompt(scene));
+  return clamp(Math.round(words / WORDS_PER_SECOND), MIN_DURATION, MAX_DURATION);
+}
 
 export function splitStoryIntoScenes(
   prompt: string,
   targetDuration = 60,
   audio = false,
 ): Scene[] {
+  // A formatted script carries its own scene boundaries — honour them.
+  if (looksLikeScript(prompt)) {
+    const structured = splitScriptIntoScenes(prompt, targetDuration, audio);
+    if (structured.length > 0) return structured;
+  }
+
   const chunks = extractChunks(prompt.trim());
   if (chunks.length === 0) return [];
 
