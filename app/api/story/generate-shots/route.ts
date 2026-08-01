@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BytePlusError, generateShots } from "@/lib/byteplus";
+import { BytePlusError, generateShots, SHOT_PLAN_SYSTEM } from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import { buildGroundedSystemText } from "@/lib/server/seedance-skill";
 import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
@@ -28,7 +29,23 @@ export async function POST(req: NextRequest) {
     const hasFirstFrame = body.hasFirstFrame === true;
 
     const { byteplus } = await getUserKeys();
-    const result = await generateShots({ concept, shotCount, durationEach, referenceImageCount, hasFirstFrame }, byteplus);
+
+    // Same grounding as the story route — both write Seedance prompts with the
+    // Seed model, so they must read the same rules or their output drifts.
+    // referenceImageCount / hasFirstFrame pull the asset docs, which a keyword
+    // scan of the concept text alone would never surface.
+    const { system } = await buildGroundedSystemText(SHOT_PLAN_SYSTEM, {
+      brief: concept,
+      mode: hasFirstFrame ? "i2v" : "t2v",
+      shotCount,
+      hasReferences: referenceImageCount > 0 || hasFirstFrame,
+    });
+
+    const result = await generateShots(
+      { concept, shotCount, durationEach, referenceImageCount, hasFirstFrame },
+      byteplus,
+      system,
+    );
     return NextResponse.json(result);
   } catch (err) {
     const keyResp = keyErrorResponse(err);

@@ -14,8 +14,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { BytePlusError, generateScenePrompts, type ScenePromptInput } from "@/lib/byteplus";
+import {
+  BytePlusError,
+  generateScenePrompts,
+  SCENE_PROMPT_SYSTEM,
+  type ScenePromptInput,
+} from "@/lib/byteplus";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import { buildGroundedSystemText } from "@/lib/server/seedance-skill";
 import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
@@ -46,9 +52,21 @@ export async function POST(
   const scenes = body.scenes as ScenePromptInput[];
   const { byteplus } = await getUserKeys();
 
+  // Ground the Seed model in the bundled Seedance skill rather than leaving it
+  // on the model's priors. The doc set is chosen from the story text plus the
+  // scene scripts — a keyword scan over the story alone would miss craft cues
+  // that only appear in an individual scene (a whispered line, a colour note).
+  // Multi-scene work always pulls continuity guidance via shotCount.
+  const brief = [body.story, ...scenes.map((s) => s.script ?? "")].join("\n");
+  const { system, selectedDocs } = await buildGroundedSystemText(SCENE_PROMPT_SYSTEM, {
+    brief,
+    mode: "t2v",
+    shotCount: scenes.length,
+  });
+
   try {
-    const result = await generateScenePrompts(body.story, scenes, byteplus);
-    return NextResponse.json({ scenes: result });
+    const result = await generateScenePrompts(body.story, scenes, byteplus, system);
+    return NextResponse.json({ scenes: result, skillDocs: selectedDocs });
   } catch (err) {
     const keyResp = keyErrorResponse(err);
     if (keyResp) return keyResp;

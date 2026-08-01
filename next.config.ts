@@ -26,6 +26,11 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/optimize-prompt": ["./claude_skill/references/**/*.md"],
     "/api/article-to-prompt": ["./claude_skill/references/**/*.md"],
+    // The Seed prompt-writing routes read the same docs. Miss one of these and
+    // the grounding silently degrades to the bare system prompt in a
+    // standalone build — the loader fails soft by design.
+    "/api/story/[id]/generate-prompts": ["./claude_skill/references/**/*.md"],
+    "/api/story/generate-shots": ["./claude_skill/references/**/*.md"],
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

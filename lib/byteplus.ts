@@ -342,10 +342,18 @@ Rules:
 - Output ONLY valid JSON — no markdown fences, no commentary:
   {"scenes":[{"index":0,"prompt":"..."},{"index":1,"prompt":"..."}]}`;
 
+/** The default system prompt, exported so callers can ground it in the
+ *  bundled Seedance skill's reference docs before passing it back in. */
+export { SCENE_PROMPT_SYSTEM };
+
 export async function generateScenePrompts(
   storyPrompt: string,
   scenes: ScenePromptInput[],
   apiKey?: string,
+  /** Overrides the built-in system prompt. Routes pass a version grounded in
+   *  claude_skill/references via buildGroundedSystemText(); this module stays
+   *  free of `fs` so it can be imported anywhere. */
+  systemPrompt?: string,
 ): Promise<ScenePromptOutput[]> {
   const userMessage = `STORY:\n${storyPrompt.trim()}\n\nSCENES:\n${scenes
     .map((s) => `[${s.index}] (${s.duration}s) ${s.script.trim() || "(no script yet)"}`)
@@ -354,7 +362,7 @@ export async function generateScenePrompts(
   const body = {
     model: resolveModel(PROMPT_MODEL),
     messages: [
-      { role: "system", content: SCENE_PROMPT_SYSTEM },
+      { role: "system", content: systemPrompt?.trim() || SCENE_PROMPT_SYSTEM },
       { role: "user", content: userMessage },
     ],
     max_tokens: 1200,
@@ -493,7 +501,15 @@ export type ShotPlanOutput = {
   brief?: string;
 };
 
-export async function generateShots(p: ShotPlanInput, apiKey?: string): Promise<ShotPlanOutput> {
+/** Exported so routes can ground it in claude_skill/references before use. */
+export { SHOT_PLAN_SYSTEM };
+
+export async function generateShots(
+  p: ShotPlanInput,
+  apiKey?: string,
+  /** Grounded override for SHOT_PLAN_SYSTEM — see generateScenePrompts. */
+  systemPrompt?: string,
+): Promise<ShotPlanOutput> {
   const inputConcept = p.concept.trim();
 
   // Long-form text (article, recipe, web extract) needs distillation first so the
@@ -525,7 +541,7 @@ export async function generateShots(p: ShotPlanInput, apiKey?: string): Promise<
   const body = {
     model: resolveModel(PROMPT_MODEL),
     messages: [
-      { role: "system", content: SHOT_PLAN_SYSTEM },
+      { role: "system", content: systemPrompt?.trim() || SHOT_PLAN_SYSTEM },
       { role: "user", content: userMessage },
     ],
     max_tokens: 8000,

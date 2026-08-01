@@ -41,10 +41,20 @@ const CORE_DOCS = [
   "safety",
 ] as const;
 
+/**
+ * Common inflections. Without this, `\bwhisper\b` fails on "whispers" and
+ * "whispered" — so a brief that plainly needs the audio doc didn't get it.
+ * Over-matching costs one extra doc; under-matching silently drops the
+ * guidance that would have shaped the prompt, so lean permissive.
+ */
+const INFLECT = "(?:e?[sd]|ing)?";
+
 /** Conditional docs, mirroring seedance.md's MUST-READ table. */
 const CONDITIONAL_DOCS: { doc: string; test: RegExp }[] = [
-  { doc: "audio", test: /\b(say|says|said|speak|speaks|dialogue|voice|voiceover|lip[- ]?sync|sing|sings|song|music|narrat|whisper|shout|chant)\b/i },
-  { doc: "performance-direction", test: /\b(cry|cries|crying|tears?|smile|smiles|laugh|angry|anger|fear|afraid|sad|sorrow|emotion|emotional|expression|grief|joy|reacts?|trembl)\b/i },
+  // `narrat\w*` / `trembl\w*` are stems: as bare alternatives they could never
+  // match, because the trailing \b sat mid-word in "narration"/"trembling".
+  { doc: "audio", test: new RegExp(`\\b(say|said|speak|spoke|dialogue|voice|voice[- ]?over|lip[- ]?sync|sing|sang|song|music|narrat\\w*|whisper|shout|chant|scream|yell|mutter)${INFLECT}\\b`, "i") },
+  { doc: "performance-direction", test: new RegExp(`\\b(cry|cries|crying|tear|smile|laugh|angry|anger|fear|afraid|sad|sorrow|emotion|emotional|expression|grief|joy|react|trembl\\w*|weep|sob|frown|glare|wince)${INFLECT}\\b`, "i") },
   { doc: "character-card", test: /\b(character|hero|heroine|protagonist|recurring|same (man|woman|person|girl|boy)|mascot)\b/i },
   { doc: "narrative-design", test: /\b(story|storyline|commercial|advert|advertisement|\bad\b|episode|narrative|trailer|sequence|chapter)\b/i },
   { doc: "color-design", test: /\b(colou?r|palette|grade|grading|teal|orange|monochrome|sepia|tone|hue|saturation)\b/i },
@@ -152,4 +162,41 @@ export async function buildGroundedSystem(
     blocks.push({ type: "text", text: renderDocsBlock(skill.conditional) });
   }
   return { system: blocks, selectedDocs: skill.selected };
+}
+
+/**
+ * Same grounding, flattened to a single string.
+ *
+ * The Seed models are reached through the OpenAI-compatible /chat/completions
+ * endpoint, whose `system` message is plain text — there are no content blocks
+ * and no cache_control, so the Anthropic-shaped builder above doesn't fit.
+ * The doc selection is deliberately shared with it: both paths write Seedance
+ * prompts, so they must be grounded in the same rules or they drift.
+ *
+ * Falls back to `baseSystemPrompt` alone when the docs are unavailable (e.g. a
+ * deploy that didn't ship `claude_skill/`), so the caller still works.
+ */
+export async function buildGroundedSystemText(
+  baseSystemPrompt: string,
+  opts: { brief: string; mode?: string; shotCount?: number; hasReferences?: boolean },
+): Promise<{ system: string; selectedDocs: string[] }> {
+  const skill = await loadSkillDocs(
+    opts.brief,
+    opts.mode ?? "t2v",
+    opts.shotCount ?? 1,
+    opts.hasReferences ?? false,
+  );
+  if (skill.core.length === 0) {
+    return { system: baseSystemPrompt, selectedDocs: [] };
+  }
+
+  const docs = renderDocsBlock([...skill.core, ...skill.conditional]);
+  // Base prompt last: it carries the output contract (strict JSON), and the
+  // instruction nearest the end of a long system message is the one models
+  // follow most reliably. The references inform HOW to write; the base prompt
+  // dictates WHAT to return.
+  return {
+    system: `${DOCS_PREAMBLE}${docs}\n\n===== YOUR TASK =====\n\n${baseSystemPrompt}`,
+    selectedDocs: skill.selected,
+  };
 }
