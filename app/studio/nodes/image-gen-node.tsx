@@ -152,10 +152,20 @@ export const imageGenSpec: NodeTypeSpec<ImageGenForm> = {
     };
     const seedNum = form.seed.trim() ? Number(form.seed) : NaN;
     if (Number.isFinite(seedNum)) body.seed = seedNum;
-    // Wired image input → i2i. The /api/image route accepts a string or
-    // string[]; this canvas-side node carries one value per input port,
-    // so we always send a single string.
-    if (inputs.image) body.image = inputs.image;
+    // Wired image input → i2i. The runner joins every edge landing on a port
+    // with "\n" (see app/studio/runner.ts), so a port fed by several upstream
+    // nodes arrives as a multi-line string. Split it back out: one ref stays a
+    // plain string (single-image i2i), several become the string[] that
+    // Seedream's multi-ref / Muse mode takes. Sending the joined string as-is
+    // would put a newline-mangled URL on the wire.
+    // BytePlus caps refs at ~15; lib/byteplus documents ≤ 10 as the safe bound.
+    const refs = (inputs.image ?? "")
+      .split("\n")
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    if (refs.length === 1) body.image = refs[0];
+    else if (refs.length > 1) body.image = refs;
 
     const res = await fetch("/api/image", {
       method: "POST",
