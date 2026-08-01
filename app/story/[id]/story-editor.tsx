@@ -35,6 +35,7 @@ export function StoryEditor({ storyId }: { storyId: string }) {
   const [finalVideoUrl, setFinalVideoUrl] = React.useState<string | null>(null);
   const [stitchError, setStitchError] = React.useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = React.useState(false);
+  const [isBreakingDown, setIsBreakingDown] = React.useState(false);
   const [promptError, setPromptError] = React.useState<string | null>(null);
 
   const sceneRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
@@ -139,6 +140,69 @@ export function StoryEditor({ storyId }: { storyId: string }) {
   function handleGenerateAll() {
     if (!story) return;
     void generateAll(story.scenes, DEFAULT_VIDEO_MODEL_ID);
+  }
+
+  // ── AI breakdown (one click: cut + write) ──────────────────────────────
+
+  /**
+   * Hand the whole story to the Seed model and take back a finished shot list.
+   *
+   * The local splitter cuts on paragraphs, which says nothing about where a
+   * beat ends, and then a second call writes prompts for fragments it had no
+   * part in choosing. One call that decides the cut AND writes the prompt
+   * gives the model the context to do both coherently — and gives the user one
+   * button instead of two.
+   */
+  async function handleAiBreakdown() {
+    if (!story || story.prompt.trim().length < 10) return;
+    setIsBreakingDown(true);
+    setPromptError(null);
+    try {
+      const res = await fetch(`/api/story/${storyId}/breakdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story: story.prompt,
+          targetDuration: story.targetDuration,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+
+      const returned = data.scenes as Array<{
+        index: number;
+        duration: number;
+        prompt: string;
+        heading?: string;
+      }>;
+      if (!returned?.length) throw new Error("The model returned no scenes.");
+
+      // Reuse the existing scene rows where possible so per-scene assets,
+      // approvals and generated clips survive a re-run. Only the first N
+      // survive; extra scenes beyond the new count are dropped.
+      const previous = story.scenes;
+      save({
+        scenes: returned.map((s, i) => {
+          const kept = previous[i];
+          return kept
+            ? { ...kept, index: i, script: s.prompt, duration: s.duration }
+            : {
+                id: newSceneId(),
+                index: i,
+                duration: s.duration,
+                script: s.prompt,
+                assets: {},
+                audio: story.globalAudio,
+                clipStatus: "idle" as const,
+                approved: false,
+              };
+        }),
+      });
+    } catch (e) {
+      setPromptError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsBreakingDown(false);
+    }
   }
 
   // ── Prompt generation ──────────────────────────────────────────────────
@@ -315,23 +379,39 @@ export function StoryEditor({ storyId }: { storyId: string }) {
                     {story.prompt.trim().split(/\s+/).filter(Boolean).length} words
                     {scriptDetected && " · screenplay detected"}
                   </span>
+                  {/* Secondary: the offline splitter. Instant and free, but it
+                      cuts on paragraphs — keep it for when you want manual
+                      control or have no API key. */}
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleBreakIntoScenes}
+                    disabled={isBreakingDown || story.prompt.trim().length < 10}
+                    title="Split locally on paragraph and sentence boundaries — no AI, no cost"
+                  >
+                    Quick split
+                  </Button>
                   {story.scenes.length > 0 && (
                     <Button
                       variant="default"
                       size="sm"
                       onClick={handleGeneratePrompts}
-                      disabled={isGeneratingPrompts || story.prompt.trim().length < 10}
+                      disabled={isGeneratingPrompts || isBreakingDown || story.prompt.trim().length < 10}
+                      title="Rewrite the existing scenes' prompts without re-cutting them"
                     >
-                      {isGeneratingPrompts ? "Generating…" : "✦ Generate prompts"}
+                      {isGeneratingPrompts ? "Generating…" : "✦ Rewrite prompts"}
                     </Button>
                   )}
+                  {/* Primary: one click — the model decides the cut and writes
+                      every prompt in a single pass. */}
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={handleBreakIntoScenes}
-                    disabled={story.prompt.trim().length < 10}
+                    onClick={handleAiBreakdown}
+                    disabled={isBreakingDown || isGeneratingPrompts || story.prompt.trim().length < 10}
+                    title="The Seed model chooses the shots, their lengths, and writes each Seedance prompt"
                   >
-                    Break into scenes →
+                    {isBreakingDown ? "Breaking down…" : "✦ Break down with AI →"}
                   </Button>
                 </div>
               </div>

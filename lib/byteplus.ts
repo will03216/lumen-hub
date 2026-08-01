@@ -346,6 +346,152 @@ Rules:
  *  bundled Seedance skill's reference docs before passing it back in. */
 export { SCENE_PROMPT_SYSTEM };
 
+// ---------- Story breakdown (one call: cut + write) ----------
+//
+// The client-side splitter cuts on paragraphs and sentences, which is a
+// typography heuristic, not a directorial one — it has no idea where a beat
+// actually ends. This does the breakdown with the model instead: it decides
+// how many shots the story needs, where each one starts and stops, how long it
+// runs, and writes the Seedance prompt for it, in a single request.
+
+export type StoryBreakdownScene = {
+  index: number;
+  /** Seconds. Constrained to the 5–15 s window the store expects. */
+  duration: number;
+  /** Ready-to-use Seedance prompt for the shot. */
+  prompt: string;
+  /** Short human-readable label for the scene list. */
+  heading?: string;
+  /** Characters on screen, when the source names any. */
+  characters?: string[];
+};
+
+export type StoryBreakdownInput = {
+  story: string;
+  /** Total runtime to aim for, in seconds. */
+  targetDuration: number;
+  /**
+   * Scene boundaries already declared by a formatted screenplay. When present
+   * the model must honour them rather than re-cutting — the writer's scene
+   * breaks outrank any inference we could make.
+   */
+  authoredScenes?: { heading: string; characters: string[]; body: string }[];
+};
+
+const BREAKDOWN_SYSTEM = `You are a director and storyboard artist breaking a story into shots for an AI video generation model (Seedance).
+
+Decide the shot list yourself. Do not simply cut on paragraph breaks — cut where the beat changes: a new action, a new location, a reaction, a reveal, a shift in time.
+
+Rules:
+- Each shot runs 5–15 seconds. Choose the length from what has to happen on screen, not evenly.
+- The sum of all durations should land near the requested total. Prefer fewer, longer shots over many tiny ones.
+- Write each "prompt" as a complete, self-contained Seedance prompt of 20–45 words. Lead with the subject and action, then camera, then light and mood.
+- Carry the same subject description, wardrobe, palette and lighting across every shot so the sequence looks continuous.
+- Do NOT put dialogue, sound effects, or audio description in "prompt".
+- "heading" is a 2–6 word label for the shot list, e.g. "Riverside bench, golden hour".
+- "characters" lists who is visible in the shot; omit it when nobody is.
+- Output ONLY valid JSON — no markdown fences, no commentary:
+  {"scenes":[{"index":0,"duration":8,"prompt":"...","heading":"...","characters":["..."]}]}`;
+
+export { BREAKDOWN_SYSTEM };
+
+/**
+ * Break a story into shots and write each shot's prompt in ONE model call.
+ *
+ * Combining the two steps is deliberate: a model that has already decided
+ * where a shot starts and ends writes a better prompt for it than one handed
+ * a pre-cut fragment with no idea why it was cut there.
+ */
+export async function breakdownStory(
+  p: StoryBreakdownInput,
+  apiKey?: string,
+  systemPrompt?: string,
+): Promise<StoryBreakdownScene[]> {
+  const target = Math.max(5, Math.round(p.targetDuration));
+  // Advisory, not a hard cap — the model still picks the real count.
+  const suggested = Math.max(1, Math.round(target / 9));
+
+  const authored = p.authoredScenes?.length
+    ? `\n\nThe source is a formatted screenplay with ${p.authoredScenes.length} authored scene(s). ` +
+      `Produce exactly one shot per authored scene, in this order, and keep its heading and characters:\n` +
+      p.authoredScenes
+        .map((s, i) => `[${i}] ${s.heading}${s.characters.length ? ` — characters: ${s.characters.join(", ")}` : ""}\n${s.body}`)
+        .join("\n\n")
+    : "";
+
+  const userMessage =
+    `TOTAL RUNTIME: ${target}s (aim for roughly ${suggested} shot${suggested === 1 ? "" : "s"}, but use however many the story needs)\n\n` +
+    `STORY:\n${p.story.trim()}${authored}`;
+
+  const body = {
+    model: resolveModel(PROMPT_MODEL),
+    messages: [
+      { role: "system", content: systemPrompt?.trim() || BREAKDOWN_SYSTEM },
+      { role: "user", content: userMessage },
+    ],
+    max_tokens: 4000,
+    temperature: 0.6,
+  };
+
+  const out = await request<{
+    choices?: Array<{ message?: { content?: string } }>;
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
+
+  const raw = out.choices?.[0]?.message?.content?.trim();
+  if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
+
+  const json = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  let parsed: { scenes?: unknown };
+  try {
+    parsed = JSON.parse(json) as { scenes?: unknown };
+  } catch {
+    throw new BytePlusError(502, "Bad Gateway", `breakdown was not valid JSON: ${json.slice(0, 200)}`);
+  }
+  if (!Array.isArray(parsed.scenes) || parsed.scenes.length === 0) {
+    throw new BytePlusError(502, "Bad Gateway", "breakdown returned no scenes");
+  }
+
+  return normalizeBreakdown(parsed.scenes as Array<Record<string, unknown>>);
+}
+
+/**
+ * Coerce the model's output into the shape the store requires.
+ *
+ * A model that returns an out-of-range duration or a missing index would
+ * otherwise write an invalid Scene straight into localStorage, so every field
+ * is clamped or rebuilt here rather than trusted.
+ */
+export function normalizeBreakdown(
+  raw: Array<Record<string, unknown>>,
+): StoryBreakdownScene[] {
+  return raw
+    .map((s, i) => {
+      const prompt = typeof s.prompt === "string" ? s.prompt.trim() : "";
+      // Number(null) and Number("") are both 0 — finite, so a bare Number()
+      // would clamp a MISSING duration to the 5 s floor instead of falling
+      // back to the default. Only a real number or a numeric string counts.
+      const n =
+        typeof s.duration === "number"
+          ? s.duration
+          : typeof s.duration === "string"
+            ? Number(s.duration)
+            : NaN;
+      const characters = Array.isArray(s.characters)
+        ? s.characters.filter((c): c is string => typeof c === "string" && c.trim() !== "").map((c) => c.trim())
+        : undefined;
+      return {
+        // Re-index from position: a model that repeats or skips an index would
+        // otherwise collide scenes when they are merged back by index.
+        index: i,
+        duration: Number.isFinite(n) ? Math.min(15, Math.max(5, Math.round(n))) : 8,
+        prompt,
+        heading: typeof s.heading === "string" && s.heading.trim() ? s.heading.trim() : undefined,
+        characters: characters?.length ? characters : undefined,
+      };
+    })
+    .filter((s) => s.prompt !== "");
+}
+
 export async function generateScenePrompts(
   storyPrompt: string,
   scenes: ScenePromptInput[],

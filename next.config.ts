@@ -31,6 +31,7 @@ const nextConfig: NextConfig = {
     // standalone build — the loader fails soft by design.
     "/api/story/[id]/generate-prompts": ["./claude_skill/references/**/*.md"],
     "/api/story/generate-shots": ["./claude_skill/references/**/*.md"],
+    "/api/story/[id]/breakdown": ["./claude_skill/references/**/*.md"],
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
