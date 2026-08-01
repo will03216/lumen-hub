@@ -60,6 +60,7 @@ const FIELDS: { id: FieldId; label: string; placeholder: string; hint: string }[
 
 type Hints = Partial<Record<Provider, string | null>>
 type Toast = { type: 'success' | 'error'; message: string }
+type LoadStatus = 'loading' | 'ready' | 'error'
 
 export default function SettingsPage() {
   // useSearchParams requires a Suspense boundary during prerender.
@@ -80,6 +81,9 @@ function SettingsForm() {
     byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '',
   })
   const [hints, setHints] = useState<Hints>({})
+  /** Distinguishes "still loading" and "load failed" from "nothing saved" —
+   *  all three used to render as an empty form. */
+  const [loadStatus, setLoadStatus] = useState<LoadStatus>('loading')
   const [visible, setVisible] = useState<Record<FieldId, boolean>>({
     byteplusApiKey: false, byteplusAk: false, bytelusSk: false, byteplusTosBucket: false, byteplusMediakitKey: false,
   })
@@ -92,20 +96,47 @@ function SettingsForm() {
     setTimeout(() => setToast(null), 3500)
   }
 
-  const loadHints = useCallback(async (): Promise<Hints> => {
+  /**
+   * Load the saved-key hints.
+   *
+   * An empty result and a failed request must not render the same. Returning
+   * `{}` on failure made a dropped request look exactly like an account with
+   * nothing saved — the user reads that as "my credentials vanished".
+   *
+   * Two things can make a failure masquerade as success:
+   *  - a redirect to an HTML page (fetch follows it, so `res.ok` is true and
+   *    the status really is 200 — `!res.ok` cannot catch it)
+   *  - any non-JSON body, which only blows up later inside res.json()
+   * Both are checked explicitly, and `loadStatus` drives a visible error.
+   */
+  const loadHints = useCallback(async (): Promise<Hints | null> => {
+    setLoadStatus('loading')
     try {
       const res = await fetch('/api/user/keys')
-      if (!res.ok) return {}
+      const isJson = res.headers
+        .get('content-type')
+        ?.toLowerCase()
+        .includes('application/json')
+      if (res.redirected || !isJson) {
+        // Signed out, or something upstream swallowed the request.
+        setLoadStatus('error')
+        return null
+      }
+      if (!res.ok) {
+        setLoadStatus('error')
+        return null
+      }
       const { keys } = (await res.json()) as { keys: Hints }
       setHints(keys)
+      setLoadStatus('ready')
       return keys
     } catch {
-      // non-critical
-      return {}
+      setLoadStatus('error')
+      return null
     }
   }, [])
 
-  useEffect(() => { loadHints() }, [loadHints])
+  useEffect(() => { void loadHints() }, [loadHints])
 
   /**
    * Enter the app after onboarding. The `onboarded` flag was just written to
@@ -151,6 +182,12 @@ function SettingsForm() {
       setValues({ byteplusApiKey: '', byteplusAk: '', bytelusSk: '', byteplusTosBucket: '', byteplusMediakitKey: '' })
       const fresh = await loadHints()
       if (isSetup) {
+        // The save succeeded; only the read-back failed. Don't claim keys are
+        // missing on the strength of a request we know didn't land.
+        if (!fresh) {
+          showToast('error', 'Saved, but could not re-read your keys. Reload to continue.')
+          return
+        }
         if (allRequiredSaved(fresh)) { await enterApp(); return }
         const missing = REQUIRED_PROVIDERS.filter((p) => !fresh[p]).length
         showToast('success', `Saved. Add the ${missing} remaining required key${missing > 1 ? 's' : ''} to continue.`)
@@ -220,6 +257,32 @@ function SettingsForm() {
         <p className="text-sm text-ink-dim mb-8">
           Encrypted with AES-256-GCM before storage. Never logged or shared.
         </p>
+
+        {/* Without this, a failed load renders exactly like an account with
+            nothing saved — which reads as "my credentials disappeared". */}
+        {loadStatus === 'error' && (
+          <div
+            role="alert"
+            className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm"
+          >
+            <p className="text-amber-200">
+              Couldn&apos;t load your saved keys — this is a display problem, not
+              a deletion. Anything you saved is still stored.
+            </p>
+            <button
+              type="button"
+              onClick={() => void loadHints()}
+              className="mt-2 text-[13px] text-amber-300 underline hover:text-amber-200"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+        {loadStatus === 'loading' && (
+          <p className="mb-6 font-mono text-[11px] text-ink-dim">
+            loading saved keys…
+          </p>
+        )}
 
         <div className="space-y-6">
           {FIELDS.map(({ id, label, placeholder, hint }) => {

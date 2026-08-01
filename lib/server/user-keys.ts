@@ -1,5 +1,6 @@
 import { auth } from '@clerk/nextjs/server'
 import { decryptApiKey } from '@/lib/crypto'
+import { logRouteError } from '@/lib/server-log'
 import { MissingKeyError } from '@/lib/server/missing-key'
 
 export { MissingKeyError }
@@ -35,6 +36,7 @@ export async function getUserKeys(): Promise<UserKeys> {
   const { userId } = await auth()
   if (!userId) return {}
 
+  const startedAt = Date.now()
   try {
     const { db } = await import('@/lib/db')
     const result = await db.query<{ provider: string; encrypted_key: string }>(
@@ -56,12 +58,23 @@ export async function getUserKeys(): Promise<UserKeys> {
           case 'minimax':          keys.minimax = plain;         break
           case 'minimax_group_id': keys.minimaxGroupId = plain;  break
         }
-      } catch {
-        // Corrupted or mis-keyed row — skip silently, fall back to env var
+      } catch (err) {
+        // Corrupted row, or KEY_ENCRYPTION_SECRET rotated out from under it.
+        // The row still exists, so the caller will be told "no key" — log it
+        // or that stays invisible and looks like the user never saved one.
+        logRouteError('user-keys.lookup', err, startedAt, {
+          stage: 'decrypt',
+          provider: row.provider,
+        })
       }
     }
     return keys
-  } catch {
+  } catch (err) {
+    // Callers treat {} as "user hasn't configured a key" and answer 402
+    // "Add your key in Settings" — which is a lie when the lookup itself
+    // failed. We can't change that here without threading a Result type
+    // through ~25 call sites, so at minimum make the real cause visible.
+    logRouteError('user-keys.lookup', err, startedAt, { stage: 'query' })
     return {}
   }
 }
