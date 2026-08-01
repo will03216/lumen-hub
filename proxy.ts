@@ -17,8 +17,8 @@ const isOnboardingRoute = createRouteMatcher([
 // Reachable by an authenticated-but-denied user so the access gate doesn't loop.
 const isAccessDeniedRoute = createRouteMatcher(['/not-authorized(.*)'])
 
-// API routes self-guard with a 402/403 JSON response, so we never redirect
-// them — an XHR should get clean JSON, not an HTML page.
+// API routes answer with JSON — 401 unauthenticated, 403 access_denied — and
+// are never redirected. An XHR should get clean JSON, not an HTML page.
 const isApiRoute = createRouteMatcher(['/api/(.*)'])
 
 // ── Access gate (opt-in) ────────────────────────────────────────────────────
@@ -59,7 +59,20 @@ function emailAllowed(email: string | undefined): boolean {
 export const proxy = clerkMiddleware(async (auth, request) => {
   if (isPublicRoute(request)) return
 
-  const { userId, sessionClaims } = await auth.protect()
+  // Pages get auth.protect()'s redirect to /sign-in. API routes must NOT:
+  // auth.protect() answers an unauthenticated XHR with a 307 to the sign-in
+  // page, and fetch() follows redirects by default, so the caller receives
+  // `200 text/html`. `res.ok` is then true while `res.json()` throws — which
+  // is indistinguishable from "the request worked and there was no data".
+  // Every caller that guards on `!res.ok` is structurally unable to catch it.
+  // Answer with a real 401 instead; routes still self-guard behind this.
+  const { userId, sessionClaims } = isApiRoute(request)
+    ? await auth()
+    : await auth.protect()
+
+  if (isApiRoute(request) && !userId) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 })
+  }
 
   // 1) Access gate — coarse env allowlist OR a per-user Clerk grant.
   // Requires the Clerk session token to expose both claims:
