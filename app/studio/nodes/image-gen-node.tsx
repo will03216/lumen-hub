@@ -1,12 +1,15 @@
 "use client";
 
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect } from "react";
 import { useReactFlow, type NodeProps } from "@xyflow/react";
 import {
   IMAGE_MODELS,
   IMAGE_SIZES,
   DEFAULT_IMAGE_MODEL_ID,
   DEFAULT_IMAGE_SIZE,
+  allowedSizes,
+  clampSizeToModel,
+  isSizeAllowed,
 } from "@/lib/studio/models";
 import { stageGeneratedImage } from "@/lib/library/auto-save";
 import { NodeShell } from "./node-shell";
@@ -45,6 +48,21 @@ export const ImageGenNode = memo(function ImageGenNode({
 
   const url = d.outputs.url;
 
+  // Repair a size the selected model can't render.
+  //
+  // A stored canvas can hold an illegal size — templates shipped that way, and
+  // a project keeps whatever it was created with even after the template is
+  // fixed, because templates are snapshots rather than live references. It can
+  // also happen by switching to a smaller-ceiling model with a big size
+  // selected. Either way the run dies on an unrecoverable BytePlus 400, so
+  // correct it to the nearest legal size (same aspect ratio where possible).
+  // Writing it back through `update` means autosave persists the repair.
+  const sizeOptions = allowedSizes(d.form.model);
+  useEffect(() => {
+    if (isSizeAllowed(d.form.size, d.form.model)) return;
+    update({ size: clampSizeToModel(d.form.size, d.form.model) });
+  }, [d.form.size, d.form.model, update]);
+
   return (
     <NodeShell
       id={id}
@@ -73,7 +91,9 @@ export const ImageGenNode = memo(function ImageGenNode({
             onChange={(e) => update({ size: e.target.value })}
             className="nodrag w-full rounded-[8px] border border-border bg-panel px-2 py-1 text-[12px] text-ink focus:border-accent focus:outline-none"
           >
-            {IMAGE_SIZES.map((s) => (
+            {/* Only sizes this model can render — offering the rest just
+                hands the user a guaranteed 400. */}
+            {sizeOptions.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -145,10 +165,16 @@ export const imageGenSpec: NodeTypeSpec<ImageGenForm> = {
     const prompt = inputs.prompt?.trim();
     if (!prompt) throw new Error("Prompt input is required");
 
+    // Last line of defence. The UI repairs an illegal size on render, but a
+    // "Run all" can reach a node the user never looked at, and BytePlus
+    // answers an oversized request with a 400 that kills the whole run.
+    // Clamping here is strictly better than failing.
+    const size = clampSizeToModel(form.size, form.model);
+
     const body: Record<string, unknown> = {
       prompt,
       model: form.model,
-      size: form.size,
+      size,
     };
     const seedNum = form.seed.trim() ? Number(form.seed) : NaN;
     if (Number.isFinite(seedNum)) body.seed = seedNum;
@@ -185,7 +211,8 @@ export const imageGenSpec: NodeTypeSpec<ImageGenForm> = {
       url,
       prompt,
       model: form.model,
-      size: form.size,
+      // The clamped size — what was actually rendered, not what was asked for.
+      size,
       seed: Number.isFinite(seedNum) ? seedNum : undefined,
       projectId,
     });

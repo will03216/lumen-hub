@@ -416,8 +416,11 @@ const referenceCreativePackage: StudioTemplate = {
           position: POS(920, 560),
           data: {
             form: {
+              // 9:16 at 3.7 MP. Was 2160x3840 (8.3 MP), which the default
+              // model — Seedream 5.0 Pro, capped at 4,624,220 px — rejects
+              // outright, so this node 400'd on every run of the template.
               ...imageForm(),
-              size: "2160x3840",
+              size: "1440x2560",
             },
           },
         },

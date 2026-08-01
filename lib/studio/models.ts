@@ -8,21 +8,46 @@
 // ─────────────────────────── Image ──────────────────────────────────────
 
 /**
- * Size presets offered in the Image Gen dropdown. Each Seedream generation has
- * its own pixel ceiling (5.0 Pro caps at 2K / 2048×2048, 5.0 Lite at 3K, 4.5 at
- * 4K), and the engine rejects an out-of-range size with a 400 that the
- * /api/image route surfaces as-is — there is no per-model client-side clamp.
- * The presets below stay inside the lowest common ceiling so they work on any
- * selected model.
+ * Size presets offered in the Image Gen dropdown.
+ *
+ * Each Seedream generation has its own pixel ceiling (5.0 Pro caps at 2K, 5.0
+ * Lite at 3K, 4.5 at 4K) and the engine rejects an out-of-range size with a
+ * 400 that /api/image surfaces as-is — there is no per-model client-side
+ * clamp.
+ *
+ * These presets do NOT all fit the lowest ceiling, despite what this comment
+ * used to claim. The default model is 5.0 Pro (IMAGE_MODELS[0]), whose
+ * measured ceiling is 4,624,220 px — so FOUR of the six entries below are
+ * rejected on a default-model render:
+ *
+ *     2048x2048   4,194,304 px   ok on every model
+ *     2560x1440   3,686,400 px   ok on every model
+ *     3072x3072   9,437,184 px   needs 3K+  (5.0 Lite / 4.5)
+ *     3840x2160   8,294,400 px   needs 3K+  (5.0 Lite / 4.5)
+ *     2160x3840   8,294,400 px   needs 3K+  (5.0 Lite / 4.5)
+ *     4096x4096  16,777,216 px   needs 4K   (4.5 only)
+ *
+ * So picking a preset is not safe by itself — it has to be paired with a model
+ * that can take it. Templates should stick to the first two unless they also
+ * pin a bigger model. The real fix is clamping the size list to the selected
+ * model in the Image Gen dropdown; until that exists, this table is the
+ * contract.
  */
 export const IMAGE_SIZES = [
-  "2048x2048", // 1:1  · 4.2 MP (default)
-  "3072x3072", // 1:1  · 9.4 MP (3K)
-  "4096x4096", // 1:1  · 16.7 MP (4K, max)
-  "2560x1440", // 16:9 · 3.7 MP (2.5K)
-  "3840x2160", // 16:9 · 8.3 MP (4K)
-  "2160x3840", // 9:16 · 8.3 MP (4K vertical)
+  "2048x2048", // 1:1  · 4.2 MP (default) — any model
+  "3072x3072", // 1:1  · 9.4 MP (3K)      — NOT 5.0 Pro
+  "4096x4096", // 1:1  · 16.7 MP (4K max) — 4.5 only
+  "2560x1440", // 16:9 · 3.7 MP (2.5K)    — any model
+  "3840x2160", // 16:9 · 8.3 MP (4K)      — NOT 5.0 Pro
+  "2160x3840", // 9:16 · 8.3 MP (4K vert) — NOT 5.0 Pro
 ] as const;
+
+/**
+ * Measured ceiling for the default model (Seedream 5.0 Pro), from the API's
+ * own rejection: "image area must be at most 4624220 pixels". Exported so
+ * tests can assert that shipped templates stay inside it.
+ */
+export const DEFAULT_MODEL_MAX_PIXELS = 4_624_220;
 
 export type ImageSize = (typeof IMAGE_SIZES)[number] | string;
 
@@ -38,6 +63,11 @@ export type ImageModel = {
   /** Defaults to "byteplus" when absent — keeps the existing entries
    *  untouched and lets new ones opt into a different upstream. */
   provider?: ImageProvider;
+  /** Pixel ceiling (width × height). The engine rejects anything larger with
+   *  a 400 the client can't recover from, so this is what lets the UI offer
+   *  only sizes the selected model can actually render. Omit when unknown —
+   *  callers then apply no clamp rather than guessing. */
+  maxPixels?: number;
 };
 
 export const IMAGE_MODELS: readonly ImageModel[] = [
@@ -45,16 +75,21 @@ export const IMAGE_MODELS: readonly ImageModel[] = [
     id: "dola-seedream-5-0-pro-260628",
     label: "Seedream 5.0 Pro",
     hint: "Top fidelity · 2K",
+    // Measured from the API's own rejection, not the docs:
+    // "image area must be at most 4624220 pixels".
+    maxPixels: DEFAULT_MODEL_MAX_PIXELS,
   },
   {
     id: "seedream-5-0-lite-260128",
     label: "Seedream 5.0 Lite",
     hint: "Fast · balanced",
+    maxPixels: 3072 * 3072, // 3K
   },
   {
     id: "seedream-4-5-251128",
     label: "Seedream 4.5",
     hint: "Highest fidelity",
+    maxPixels: 4096 * 4096, // 4K
   },
   {
     // fal model id — passed through verbatim to https://queue.fal.run/<id>.
@@ -66,6 +101,68 @@ export const IMAGE_MODELS: readonly ImageModel[] = [
     provider: "fal",
   },
 ] as const;
+
+// ──────────────────── Size ↔ model compatibility ────────────────────────
+//
+// A stored canvas can hold a size its model can't render — templates shipped
+// that way twice, and a project keeps whatever size it was created with even
+// after the template is fixed (templates are snapshots, not live references).
+// So "is this size legal for this model?" has to be answerable at runtime,
+// not just at authoring time.
+
+/** Pixel count for a "WxH" string, or null when unparseable. */
+export function sizePixels(size: string): number | null {
+  const m = /^(\d+)x(\d+)$/.exec(size.trim());
+  if (!m) return null;
+  return Number(m[1]) * Number(m[2]);
+}
+
+/** The model's ceiling, or null when we don't know it (no clamp applied). */
+export function modelMaxPixels(modelId: string): number | null {
+  return findImageModel(modelId)?.maxPixels ?? null;
+}
+
+/** Can this model actually render this size? Unknown ceiling ⇒ assume yes. */
+export function isSizeAllowed(size: string, modelId: string): boolean {
+  const px = sizePixels(size);
+  const cap = modelMaxPixels(modelId);
+  if (px === null || cap === null) return true;
+  return px <= cap;
+}
+
+/** The presets a given model can render. */
+export function allowedSizes(modelId: string): string[] {
+  return IMAGE_SIZES.filter((s) => isSizeAllowed(s, modelId));
+}
+
+/**
+ * Nearest legal size for a model, preferring the same aspect ratio so a
+ * vertical shot stays vertical. Returns `size` unchanged when it's already
+ * legal, so callers can use the result directly and compare for "did this
+ * change?".
+ */
+export function clampSizeToModel(size: string, modelId: string): string {
+  if (isSizeAllowed(size, modelId)) return size;
+
+  const m = /^(\d+)x(\d+)$/.exec(size.trim());
+  const options = allowedSizes(modelId);
+  if (options.length === 0) return size; // nothing legal to offer — leave it
+  if (!m) return options[0];
+
+  const ratio = Number(m[1]) / Number(m[2]);
+  const scored = options
+    .map((s) => {
+      const p = /^(\d+)x(\d+)$/.exec(s)!;
+      return {
+        size: s,
+        ratioDelta: Math.abs(Number(p[1]) / Number(p[2]) - ratio),
+        px: sizePixels(s) ?? 0,
+      };
+    })
+    // Closest aspect ratio first; among equals, the largest that still fits.
+    .sort((a, b) => a.ratioDelta - b.ratioDelta || b.px - a.px);
+  return scored[0].size;
+}
 
 // ─────────────────────────── Suggestions ────────────────────────────────
 
