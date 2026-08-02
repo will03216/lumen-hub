@@ -32,6 +32,7 @@
 
 import * as React from "react";
 import Konva from "konva";
+import { Maximize2, Minus, Plus } from "lucide-react";
 import {
   Arrow,
   Circle,
@@ -101,6 +102,9 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
 /** A drag shorter than this is a click, not a box/arrow. In image px. */
 const MIN_DRAG_PX = 3;
+/** One click of the zoom buttons. Matches roughly two wheel notches — enough
+ *  to feel like progress, small enough to land on a useful level. */
+const ZOOM_STEP = 1.25;
 /** Smallest box a resize may produce, in SCREEN px — the transformer works in
  *  screen space, and a box below this is impossible to grab again. */
 const MIN_BOX_SCREEN_PX = 12;
@@ -385,33 +389,44 @@ export default function EditCanvas({
     }
   }
 
+  /**
+   * Zoom to `next`, keeping one screen point pinned.
+   *
+   * The wheel pins the cursor; the buttons pin the middle of the viewport.
+   * Both go through here so they cannot drift apart — the anchoring is the
+   * only interesting part, and having it twice is how the buttons end up
+   * zooming somewhere other than where the wheel does.
+   */
+  function zoomTo(next: number, anchor?: Vec) {
+    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+    if (clamped === zoom) return;
+    const a = anchor ?? { x: size.w / 2, y: size.h / 2 };
+    // Convert the anchor to image space at the old scale, then solve for the
+    // pan that puts it back under the same screen point at the new one.
+    // Zooming to the stage origin instead makes precise work near an edge
+    // impossible.
+    const imgPt = { x: (a.x - tx) / eff, y: (a.y - ty) / eff };
+    const nextEff = fit.scale * clamped;
+    setPan({
+      x: a.x - imgPt.x * nextEff - fit.dx,
+      y: a.y - imgPt.y * nextEff - fit.dy,
+    });
+    setZoom(clamped);
+  }
+
+  /** Back to the fitted view. No anchoring: the contain-fit re-centres. */
+  function resetView() {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }
+
   function onWheel(e: KonvaEventObject<WheelEvent>) {
     e.evt.preventDefault();
     const stage = stageRef.current;
     if (!stage) return;
     const ptr = stage.getPointerPosition();
     if (!ptr) return;
-
-    const next = Math.min(
-      MAX_ZOOM,
-      Math.max(MIN_ZOOM, zoom * (e.evt.deltaY > 0 ? 0.9 : 1.1)),
-    );
-    if (next === zoom) return;
-
-    // Keep the point under the cursor fixed: convert it to image space at the
-    // old scale, then solve for the pan that puts it back under the cursor at
-    // the new one. Zooming to the stage centre instead makes precise work
-    // near an edge impossible.
-    const imgPt = {
-      x: (ptr.x - tx) / eff,
-      y: (ptr.y - ty) / eff,
-    };
-    const nextEff = fit.scale * next;
-    setPan({
-      x: ptr.x - imgPt.x * nextEff - fit.dx,
-      y: ptr.y - imgPt.y * nextEff - fit.dy,
-    });
-    setZoom(next);
+    zoomTo(zoom * (e.evt.deltaY > 0 ? 0.9 : 1.1), ptr);
   }
 
   if (size.w === 0 || size.h === 0 || !img) {
@@ -435,9 +450,19 @@ export default function EditCanvas({
   return (
     <div
       ref={wrapRef}
-      className="size-full"
+      className="relative size-full"
       style={{ cursor: tool === "pan" ? "grab" : "crosshair" }}
     >
+      <ZoomBar
+        zoom={zoom}
+        // "Actual size" is 1 image pixel per screen pixel, which is a
+        // different thing from the fitted view: zoom rides on top of the
+        // contain-fit, so 1:1 is 1/fit.scale. Worth its own button — a mark
+        // placed at a fitted 40% is placed on a guess.
+        actualZoom={fit.scale > 0 ? 1 / fit.scale : 1}
+        onZoom={(z) => zoomTo(z)}
+        onReset={resetView}
+      />
       <Stage
         ref={stageRef}
         width={size.w}
@@ -835,6 +860,92 @@ function MarkLabel({
         fill="#0b0b0b"
       />
     </Label>
+  );
+}
+
+/**
+ * Zoom control. HTML, not Konva — it is chrome, not content: it must not
+ * scale with the stage, must not appear in a composite, and must not be part
+ * of the hit graph the drawing gestures use.
+ *
+ * The percentage is relative to the FITTED view, not to image pixels, because
+ * that is the number the user can act on: 100% means "what I saw when I
+ * opened this", which is what makes it a sensible thing to click to get back
+ * to. Actual pixel scale is one button along.
+ */
+function ZoomBar({
+  zoom,
+  actualZoom,
+  onZoom,
+  onReset,
+}: {
+  zoom: number;
+  actualZoom: number;
+  onZoom: (zoom: number) => void;
+  onReset: () => void;
+}) {
+  const atActual = Math.abs(zoom - actualZoom) < 0.005;
+  return (
+    <div className="absolute bottom-3 left-3 z-10 flex items-center gap-0.5 rounded-full border border-border bg-panel/90 p-1 backdrop-blur-sm">
+      <ZoomButton
+        onClick={() => onZoom(zoom / ZOOM_STEP)}
+        disabled={zoom <= MIN_ZOOM + 1e-6}
+        title="Zoom out"
+      >
+        <Minus className="size-3.5" />
+      </ZoomButton>
+
+      {/* The readout IS the reset. A separate "fit" button next to a
+          percentage that already reads 100% is two controls for one idea. */}
+      <button
+        onClick={onReset}
+        title="Back to 100% — the fitted view"
+        className="min-w-[52px] cursor-pointer rounded-full px-2 py-1 text-center font-mono text-[11px] tabular-nums text-ink-dim transition-colors hover:bg-[var(--bg)] hover:text-ink"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+
+      <ZoomButton
+        onClick={() => onZoom(zoom * ZOOM_STEP)}
+        disabled={zoom >= MAX_ZOOM - 1e-6}
+        title="Zoom in"
+      >
+        <Plus className="size-3.5" />
+      </ZoomButton>
+
+      <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+
+      <ZoomButton
+        onClick={() => onZoom(actualZoom)}
+        disabled={atActual}
+        title="Actual size — one image pixel per screen pixel"
+      >
+        <Maximize2 className="size-3.5" />
+      </ZoomButton>
+    </div>
+  );
+}
+
+function ZoomButton({
+  children,
+  onClick,
+  disabled,
+  title,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="grid size-7 cursor-pointer place-items-center rounded-full text-ink-dim transition-colors hover:bg-[var(--bg)] hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-dim"
+    >
+      {children}
+    </button>
   );
 }
 
