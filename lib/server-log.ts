@@ -37,7 +37,8 @@ export type RouteTag =
   | "article-to-prompt"
   | "optimize-prompt"
   | "user-keys.lookup"
-  | "story.breakdown";
+  | "story.breakdown"
+  | "story.upload-reference";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,
  *  but we fall back to `console.error` with a space-separated fallback
