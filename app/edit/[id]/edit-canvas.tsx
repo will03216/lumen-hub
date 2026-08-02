@@ -55,6 +55,7 @@ import {
 } from "@/lib/edit/geometry";
 import { clampToImage, fitContain, isInsideImage } from "@/lib/edit/coords";
 import { resolveSafeUrl } from "@/lib/edit/same-origin";
+import { isStageDrag } from "@/lib/edit/stage-drag";
 // DraftAnnotation is defined next to buildAnnotation rather than here, so the
 // canvas and the agent tooling that lands later both produce marks through
 // one shape and one labelling path.
@@ -473,6 +474,14 @@ export default function EditCanvas({
         y={ty}
         draggable={tool === "pan"}
         onDragEnd={(e) => {
+          // ONLY the Stage's own drag moves the camera.
+          //
+          // Konva bubbles dragend from the shape that moved up through the
+          // Layer to the Stage, so this handler fires for every mark drag too,
+          // with e.target being the MARK. Folding a mark's coordinates into
+          // the pan set the camera to, say, (425, 913) — the picture vanished
+          // off screen and the canvas went blank, which reads as a crash.
+          if (!isStageDrag(e.target)) return;
           // Konva writes the drag straight onto the Stage; fold it back into
           // our own pan so the transform stays derived from one source.
           setPan({ x: e.target.x() - fit.dx, y: e.target.y() - fit.dy });
