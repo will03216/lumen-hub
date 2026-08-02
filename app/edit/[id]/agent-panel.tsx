@@ -14,6 +14,20 @@
  *   up to a minute, so the loop pauses and waits here rather than spending on
  *   the user's behalf. Declining sends a reason back to the model so it asks
  *   what to change instead of retrying the same call.
+ *
+ * ── Why this panel does NOT stretch ──────────────────────────────────────
+ *
+ * It used to be `h-full` with a `flex-1` transcript. Its parent is the plain
+ * block column of the workspace, so `height: 100%` resolved against a height
+ * the grid had already computed from this panel's *natural* size — the panel
+ * then ate the entire column, and Marks, References, Layers and Versions were
+ * pushed several hundred pixels past the end of the grid row, painting on top
+ * of the prompt bar below it. The symptom read as two unrelated bugs: a huge
+ * empty chat box, and overlapping text at the bottom of the page.
+ *
+ * So the transcript owns an explicit height range instead. It is a scroll
+ * container either way; the only question was whether its height came from a
+ * circular percentage or from a number.
  */
 
 import * as React from "react";
@@ -54,7 +68,7 @@ export function AgentPanel({
   }
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <Sparkles className="size-3.5 text-ink-mute" />
         <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
@@ -64,7 +78,7 @@ export function AgentPanel({
 
       <div
         ref={scrollRef}
-        className="min-h-[180px] flex-1 space-y-2 overflow-y-auto rounded-[10px] border border-border bg-[var(--bg)] p-2"
+        className="max-h-[420px] min-h-[180px] flex-1 space-y-2 overflow-y-auto rounded-[10px] border border-border bg-[var(--bg)] p-2"
       >
         {entries.length === 0 && !busy && (
           <p className="p-2 text-[12px] leading-relaxed text-ink-mute">

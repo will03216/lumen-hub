@@ -12,6 +12,25 @@
  * regions you *asked* to change on top of what actually changed. Those two
  * toggles together are the difference between "here is an image" and "here
  * is proof the edit was surgical".
+ *
+ * ── Why the display box is measured rather than sized in CSS ──────────────
+ *
+ * The workspace gives this component a FIXED height and clips overflow. So
+ * anything here that sizes itself against the viewport instead of against
+ * that box gets silently cropped: `max-h-[60vh]` on the image was taller
+ * than the available area on any window over ~1060px, and the bottom of
+ * every result — plus this toolbar — was cut off. The compare slider has the
+ * same problem from the other direction: it is `width:100%` with an
+ * `aspect-ratio`, so on a square image it wanted a square 850px box inside a
+ * 610px one.
+ *
+ * CSS cannot express "fit this ratio inside both dimensions" for a
+ * non-replaced element — `aspect-ratio` clamped by `max-height` breaks the
+ * ratio rather than shrinking the other axis. So the container is measured
+ * and the box computed. One fitted rect then serves both branches, which is
+ * also what keeps the marks overlay registered with the image: the SVG and
+ * the picture are the same rect by construction, not by two independent
+ * `object-contain` calculations that agree only by luck.
  */
 
 import * as React from "react";
@@ -43,7 +62,15 @@ export function ResultView({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const url = version.outputs[0]?.url;
+  const output = version.outputs[0];
+  // The rendered size when upstream reported one, the requested size
+  // otherwise, and the source as a last resort — a wrong ratio here shows up
+  // as letterboxing inside the frame, never as a crop.
+  const aspect = parseAspect(output?.size ?? version.size) ??
+    (sourceWidth && sourceHeight ? sourceWidth / sourceHeight : 1);
+  const { ref: fitRef, box } = useFittedBox(aspect);
+
+  const url = output?.url;
   if (!url) return null;
 
   const canCompare = Boolean(sourceUrl);
@@ -64,35 +91,41 @@ export function ResultView({
 
   return (
     <div className="flex size-full flex-col">
-      <div className="relative flex min-h-0 flex-1 items-center justify-center p-4">
-        {compare && sourceUrl ? (
-          <div className="max-h-full w-full max-w-[min(100%,900px)]">
+      <div
+        ref={fitRef}
+        className="relative flex min-h-0 flex-1 items-center justify-center p-4"
+      >
+        <div
+          className="relative max-h-full max-w-full"
+          style={box ? { width: box.w, height: box.h } : undefined}
+        >
+          {compare && sourceUrl ? (
             <SliderOverlay
               aUrl={url}
               bUrl={sourceUrl}
               aLabel="Edited"
               bLabel="Original"
-              size={version.size}
+              size={output?.size ?? version.size}
             />
-          </div>
-        ) : (
-          <div className="relative inline-block max-h-full">
-            {/* eslint-disable-next-line @next/next/no-img-element -- remote
-                CDN hosts aren't in the image optimizer's allow-list. */}
-            <img
-              src={url}
-              alt="Edited result"
-              className="max-h-[60vh] w-auto max-w-full object-contain"
-            />
-            {showMarks && hasMarks && (
-              <MarksOverlay
-                annotations={annotations}
-                width={sourceWidth}
-                height={sourceHeight}
+          ) : (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- remote
+                  CDN hosts aren't in the image optimizer's allow-list. */}
+              <img
+                src={url}
+                alt="Edited result"
+                className="size-full object-contain"
               />
-            )}
-          </div>
-        )}
+              {showMarks && hasMarks && (
+                <MarksOverlay
+                  annotations={annotations}
+                  width={sourceWidth}
+                  height={sourceHeight}
+                />
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-1 border-t border-border px-3 py-2">
@@ -150,6 +183,58 @@ export function ResultView({
       )}
     </div>
   );
+}
+
+/**
+ * The largest box of a given aspect ratio that fits the measured container.
+ *
+ * Returns null until the first measurement lands, and the caller falls back
+ * to `max-h-full max-w-full` for that frame — so the pre-measure paint is
+ * bounded too rather than briefly overflowing.
+ */
+function useFittedBox(aspect: number) {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = React.useState<{ w: number; h: number } | null>(null);
+
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const measure = (w: number, h: number) => {
+      if (w <= 0 || h <= 0 || !Number.isFinite(aspect) || aspect <= 0) return;
+      // Fit inside BOTH axes. Taking the smaller of the two candidate widths
+      // is the whole calculation; getting it backwards is how you crop.
+      const width = Math.min(w, h * aspect);
+      setBox({ w: width, h: width / aspect });
+    };
+
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) measure(r.width, r.height);
+    });
+    ro.observe(el);
+    // ResizeObserver fires on observe in every engine that ships it, but the
+    // first frame is measured here as well so the box is right even if a
+    // polyfill doesn't.
+    const rect = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    measure(
+      rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+    );
+    return () => ro.disconnect();
+  }, [aspect]);
+
+  return { ref, box };
+}
+
+/** "1360x1360" → 1, or null when there is nothing usable to parse. */
+function parseAspect(size: string | undefined): number | null {
+  const m = /^(\d+)\s*x\s*(\d+)$/i.exec(size ?? "");
+  if (!m) return null;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  return w > 0 && h > 0 ? w / h : null;
 }
 
 /**
