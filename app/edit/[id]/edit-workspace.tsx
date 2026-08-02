@@ -48,6 +48,7 @@ import { AnnotationPanel } from "./annotation-panel";
 import { AgentPanel } from "./agent-panel";
 import { ResultView } from "./result-view";
 import { ReferencesPanel } from "./references-panel";
+import { CanvasBoundary } from "./canvas-boundary";
 import { LayersPanel } from "./layers-panel";
 import { PresetStrip } from "./preset-strip";
 
@@ -145,10 +146,20 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         .find((r) => r.id === activeRefId)
         ?.annotations.find((a) => a.id === id);
       if (!current || current.kind !== geometry.kind) return;
-      upsertAnnotation(sessionId, activeRefId, {
-        ...current,
-        ...geometry,
-      } as Annotation);
+      // An exception in a pointer handler never reaches the error boundary —
+      // React logs it and the gesture silently does nothing, which is
+      // indistinguishable from "dragging is broken". Surface it in the slot
+      // that is already on screen.
+      try {
+        upsertAnnotation(sessionId, activeRefId, {
+          ...current,
+          ...geometry,
+        } as Annotation);
+      } catch (e) {
+        setCapWarning(
+          `Could not move that mark: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     },
     [sessionId, activeRefId, session],
   );
@@ -287,17 +298,19 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
                 }}
               />
             ) : activeRef ? (
-              <EditCanvasLoader
-                reference={activeRef}
-                annotations={annotations}
-                tool={tool}
-                brushWidth={brushWidth}
-                color={MARKER_COLOR}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                onCommit={handleCommit}
-                onGeometry={handleGeometry}
-              />
+              <CanvasBoundary>
+                <EditCanvasLoader
+                  reference={activeRef}
+                  annotations={annotations}
+                  tool={tool}
+                  brushWidth={brushWidth}
+                  color={MARKER_COLOR}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  onCommit={handleCommit}
+                  onGeometry={handleGeometry}
+                />
+              </CanvasBoundary>
             ) : (
               <div className="flex size-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">
                 No image
