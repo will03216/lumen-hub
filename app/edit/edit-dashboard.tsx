@@ -25,6 +25,7 @@ import {
   startEditSessionFromFile,
   startEditSessionFromUrl,
 } from "@/lib/edit/start-session";
+import { IMAGE_ACCEPT_ATTR, imageFormatLabel } from "@/lib/media/upload-formats";
 import { cn } from "@/lib/utils";
 
 export function EditDashboard() {
@@ -115,7 +116,7 @@ export function EditDashboard() {
       <input
         ref={fileRef}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT_ATTR}
         className="hidden"
         onChange={(e) => {
           onFiles(e.target.files);
@@ -150,9 +151,9 @@ export function EditDashboard() {
               {busy ? "Preparing image…" : "Drop an image to start editing"}
             </div>
             <p className="max-w-[420px] text-[14px] leading-relaxed text-ink-dim">
-              PNG, JPEG or WebP, up to 50 MB. Mark the region you want changed,
-              describe the change, and Seedream 5.0 Pro leaves everything else
-              alone.
+              {imageFormatLabel()}, up to 50 MB. Mark the region you want
+              changed, describe the change, and Seedream 5.0 Pro leaves
+              everything else alone.
             </p>
 
             {urlMode ? (

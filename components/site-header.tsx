@@ -50,7 +50,12 @@ export function SiteHeader() {
             <Wordmark size={22} />
           </Link>
         </div>
-        <nav className="flex items-center gap-0.5 md:gap-1">
+        {/* min-w-0 + overflow-x-auto so the pill group scrolls instead of
+            pushing the right-hand rail out of the header. The grid's `auto`
+            column would otherwise size to content and overflow — an eighth
+            nav item put the row into the width band where that starts to
+            bite. Scrollbar hidden: this is a spill valve, not a control. */}
+        <nav className="flex min-w-0 max-w-full items-center gap-0.5 overflow-x-auto [scrollbar-width:none] md:gap-1 [&::-webkit-scrollbar]:hidden">
           {NAV.map((item) => {
             const active = item.match?.(pathname);
             return (

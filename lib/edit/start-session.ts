@@ -16,12 +16,13 @@
  * compositing path's problem and is handled separately.
  */
 
+import {
+  ALLOWED_IMAGE_MIME,
+  MAX_UPLOAD_BYTES,
+  imageFormatLabel,
+} from "@/lib/media/upload-formats";
 import { createEditSession } from "./sessions";
 import type { EditSession } from "./types";
-
-/** Beyond the 50 MB the upload route accepts. Checked client-side so the
- *  user gets the message before waiting on a 50 MB POST that will 413. */
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 export type StartFromUrlOpts = {
   url: string;
@@ -32,6 +33,18 @@ export type StartFromUrlOpts = {
   bytes?: number;
 };
 
+/**
+ * How long to wait for an image to report its dimensions.
+ *
+ * An HTMLImageElement settles ONLY via onload or onerror. A stalled
+ * connection — a hung CDN, a captive portal, a request that simply never
+ * returns — fires neither, so without this the promise stays pending for the
+ * lifetime of the page. Every caller gates a `busy` flag on it, so a hang
+ * doesn't just delay the work: it permanently disables the Edit button on
+ * that feed row, or every control on the dashboard.
+ */
+const MEASURE_TIMEOUT_MS = 20_000;
+
 /** Intrinsic size of an image URL. Rejects rather than resolving to 0×0, so
  *  callers can't accidentally persist an unmeasured ref. */
 export function measureImage(
@@ -39,17 +52,43 @@ export function measureImage(
 ): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      const width = img.naturalWidth;
-      const height = img.naturalHeight;
-      if (!width || !height) {
-        reject(new Error("Could not read the image's dimensions."));
-        return;
-      }
-      resolve({ width, height });
+    let settled = false;
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Drop the handlers so a late event can't run after we've settled.
+      img.onload = null;
+      img.onerror = null;
+      fn();
     };
+
+    const timer = setTimeout(() => {
+      finish(() => {
+        // Cancelling the in-flight fetch; without this the browser keeps the
+        // connection open behind a promise nobody is waiting on any more.
+        img.src = "";
+        reject(new Error("Timed out loading that image — it may be offline."));
+      });
+    }, MEASURE_TIMEOUT_MS);
+
+    img.onload = () =>
+      finish(() => {
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        if (!width || !height) {
+          reject(new Error("Could not read the image's dimensions."));
+          return;
+        }
+        resolve({ width, height });
+      });
+
     img.onerror = () =>
-      reject(new Error("Could not load that image — check the URL."));
+      finish(() =>
+        reject(new Error("Could not load that image — check the URL.")),
+      );
+
     img.src = url;
   });
 }
@@ -73,8 +112,15 @@ export async function startEditSessionFromUrl(
 export async function startEditSessionFromFile(
   file: File,
 ): Promise<EditSession> {
-  if (!file.type.startsWith("image/")) {
-    throw new Error(`${file.name} is not an image.`);
+  // Check against the server's own allow-list, not a loose `image/*`. An
+  // iPhone HEIC is an image by that looser test, passes every client gate,
+  // and then fails the upload with a raw 415 the user can do nothing with.
+  if (!ALLOWED_IMAGE_MIME.has(file.type)) {
+    throw new Error(
+      file.type
+        ? `${file.name} is a ${file.type.replace("image/", "").toUpperCase()} — use ${imageFormatLabel()}.`
+        : `${file.name} isn't a supported image. Use ${imageFormatLabel()}.`,
+    );
   }
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error(

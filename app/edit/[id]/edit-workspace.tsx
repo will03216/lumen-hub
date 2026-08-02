@@ -69,9 +69,32 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [showCompiled, setShowCompiled] = React.useState(false);
   const [viewVersionId, setViewVersionId] = React.useState<string | null>(null);
+  const [capWarning, setCapWarning] = React.useState<string | null>(null);
+
+  /**
+   * Which surface the viewport shows.
+   *
+   * This has to be explicit state. Deriving it from "is there a finished
+   * version?" means it is true forever after the first successful render,
+   * and the canvas becomes permanently unreachable — you can keep firing
+   * blind re-renders but can never see or adjust a mark again, which kills
+   * the whole mark-render-adjust loop.
+   */
+  const [showCanvas, setShowCanvas] = React.useState(true);
 
   const activeRef = session?.refs[0] ?? null;
   const activeRefId = activeRef?.id ?? null;
+
+  // Flip to the result when a render lands, so the user sees what they asked
+  // for without having to go looking for it.
+  const lastShownVersion = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (state.status !== "success" || !state.versionId) return;
+    if (lastShownVersion.current === state.versionId) return;
+    lastShownVersion.current = state.versionId;
+    setViewVersionId(state.versionId);
+    setShowCanvas(false);
+  }, [state.status, state.versionId]);
 
   const handleCommit = React.useCallback(
     (draft: DraftAnnotation) => {
@@ -83,7 +106,16 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         now: Date.now(),
         color: MARKER_COLOR,
       });
-      upsertAnnotation(sessionId, activeRefId, ann);
+      // The store refuses an add past the per-reference cap. Saying so beats
+      // the alternative: the user drags a box, nothing appears on the canvas,
+      // and there is no explanation anywhere on the page.
+      if (!upsertAnnotation(sessionId, activeRefId, ann)) {
+        setCapWarning(
+          `That reference already has the maximum ${existing.length} marks. Delete one to add another.`,
+        );
+        return;
+      }
+      setCapWarning(null);
       setSelectedId(ann.id);
     },
     [sessionId, activeRefId, session],
@@ -104,6 +136,16 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
       } as Annotation);
     },
     [sessionId, activeRefId, session],
+  );
+
+  // Called unconditionally, before any early return — these are hooks. The
+  // ?? "" keeps them valid while the session is still resolving.
+  const nameField = useDebouncedField(session?.name ?? "", (name) =>
+    updateEditSession(sessionId, { name }),
+  );
+  const instructionField = useDebouncedField(
+    session?.instruction ?? "",
+    (instruction) => updateEditSession(sessionId, { instruction }),
   );
 
   if (!mounted) {
@@ -134,8 +176,11 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const latestDone = [...session.versions]
     .reverse()
     .find((v) => v.status === "done" && v.outputs.length > 0);
-  const viewing =
-    session.versions.find((v) => v.id === viewVersionId) ?? latestDone;
+  // showCanvas wins outright — without that gate `latestDone` makes `viewing`
+  // permanently truthy and there is no way back to the canvas.
+  const viewing = showCanvas
+    ? undefined
+    : (session.versions.find((v) => v.id === viewVersionId) ?? latestDone);
   const busy = state.status === "running";
   const writeError = lastWriteError();
   const annotations = activeRef?.annotations ?? [];
@@ -153,10 +198,9 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             <ArrowLeft className="size-4" />
           </Link>
           <input
-            value={session.name}
-            onChange={(e) =>
-              updateEditSession(sessionId, { name: e.target.value })
-            }
+            value={nameField.value}
+            onChange={(e) => nameField.onChange(e.target.value)}
+            onBlur={nameField.flush}
             className="min-w-0 flex-1 truncate bg-transparent font-serif text-[20px] italic text-ink outline-none"
             aria-label="Session name"
           />
@@ -215,14 +259,33 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             )}
           </div>
 
-          {viewing?.outputs[0]?.url && (
-            <button
-              onClick={() => setViewVersionId(null)}
-              className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink"
-            >
-              ← Back to the canvas
-            </button>
-          )}
+          <div className="flex items-center justify-between gap-3">
+            {viewing?.outputs[0]?.url ? (
+              <button
+                onClick={() => setShowCanvas(true)}
+                className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink"
+              >
+                ← Back to the canvas
+              </button>
+            ) : (
+              latestDone && (
+                <button
+                  onClick={() => {
+                    setViewVersionId(latestDone.id);
+                    setShowCanvas(false);
+                  }}
+                  className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink"
+                >
+                  Show latest result →
+                </button>
+              )
+            )}
+            {capWarning && (
+              <span className="text-[12px] text-[oklch(0.72_0.22_15)]">
+                {capWarning}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Marks + versions */}
@@ -259,7 +322,10 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
                     version={v}
                     n={session.versions.length - i}
                     active={viewing?.id === v.id}
-                    onClick={() => setViewVersionId(v.id)}
+                    onClick={() => {
+                      setViewVersionId(v.id);
+                      setShowCanvas(false);
+                    }}
                   />
                 ))}
               </div>
@@ -271,10 +337,9 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
       {/* Prompt bar */}
       <div className="mt-6 space-y-3 rounded-[14px] border border-border bg-panel p-4">
         <textarea
-          value={session.instruction}
-          onChange={(e) =>
-            updateEditSession(sessionId, { instruction: e.target.value })
-          }
+          value={instructionField.value}
+          onChange={(e) => instructionField.onChange(e.target.value)}
+          onBlur={instructionField.flush}
           placeholder="Describe the edit — e.g. “replace the tabletop with dark walnut, keep the candle and the lighting unchanged”"
           rows={2}
           className="w-full resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-ink-mute"
@@ -314,8 +379,17 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             <Button
               variant="primary"
               size="md"
-              disabled={busy || !session.instruction.trim()}
+              // The buffered value, not the store's — otherwise the button
+              // stays disabled for the length of the debounce after typing.
+              disabled={busy || !instructionField.value.trim()}
               onClick={() => {
+                // render() reads the instruction back off the store, so any
+                // buffered keystrokes have to land first or it sends the
+                // previous text.
+                instructionField.flush();
+                // Stay on the canvas while it runs; the success effect flips
+                // to the result once there is one to show.
+                setShowCanvas(true);
                 setViewVersionId(null);
                 void render();
               }}
@@ -463,4 +537,76 @@ function Centered({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
+}
+
+/**
+ * A text field backed by the store, buffered locally and written on a debounce.
+ *
+ * Writing straight through on every keystroke is what the naive version did,
+ * and it is genuinely expensive: each one is a full read-modify-write of the
+ * ENTIRE multi-session store — JSON.parse of every session, JSON.stringify of
+ * every session, a synchronous localStorage.setItem, and a notify-all that
+ * re-renders the workspace. On a legal 3-session × 50-version store that
+ * serialises to ~490 KB, which is the same pattern the store's own docblock
+ * forbids for the brush hot path, just at typing rate instead of 60 Hz.
+ *
+ * It also fixed a visible bug: on a quota failure the store still invalidates
+ * its cache, so the next snapshot returns the pre-write value and a
+ * write-through controlled input snaps backwards mid-sentence.
+ *
+ * `flush` exists because Render reads the instruction straight off the store —
+ * without it, hitting Render within the debounce window would send the
+ * previous text.
+ */
+function useDebouncedField(
+  remote: string,
+  commit: (value: string) => void,
+  delay = 350,
+): { value: string; onChange: (v: string) => void; flush: () => void } {
+  const [local, setLocal] = React.useState(remote);
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = React.useRef<string | null>(null);
+  const commitRef = React.useRef(commit);
+  commitRef.current = commit;
+
+  // Adopt external changes only when nothing is buffered, so a write from
+  // elsewhere (a version restore) shows up without fighting live typing.
+  React.useEffect(() => {
+    if (pending.current === null) setLocal(remote);
+  }, [remote]);
+
+  const flush = React.useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (pending.current !== null) {
+      const value = pending.current;
+      pending.current = null;
+      commitRef.current(value);
+    }
+  }, []);
+
+  // Flush on unmount rather than dropping the timer — navigating away
+  // mid-word must not silently lose the last few characters.
+  const flushRef = React.useRef(flush);
+  flushRef.current = flush;
+  React.useEffect(() => () => flushRef.current(), []);
+
+  const onChange = React.useCallback(
+    (v: string) => {
+      setLocal(v);
+      pending.current = v;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        timer.current = null;
+        const value = pending.current;
+        pending.current = null;
+        if (value !== null) commitRef.current(value);
+      }, delay);
+    },
+    [delay],
+  );
+
+  return { value: local, onChange, flush };
 }

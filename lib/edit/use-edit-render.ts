@@ -50,6 +50,29 @@ function maxInputPixels(modelId: string): number {
   return modelMaxPixels(modelId) ?? 4_194_304;
 }
 
+/**
+ * Re-encode as JPEG only when the source format provably cannot carry alpha.
+ *
+ * Canvas readback always produces RGBA, and toDataURL("image/jpeg")
+ * composites that onto BLACK. So re-encoding a transparent PNG — a logo, a
+ * cut-out product shot — as JPEG hands the model a black background it will
+ * faithfully preserve. The failure is silent and looks like a model artifact.
+ *
+ * JPEG is still worth having for photographs, where it is several times
+ * smaller than PNG and the request is base64. So the rule is: only formats
+ * that definitionally have no alpha channel get the smaller encoding, and
+ * anything that might carry transparency keeps it.
+ */
+function encodingFor(url: string): "image/png" | "image/jpeg" {
+  const path = (url.split("?")[0] ?? "").toLowerCase();
+  if (url.startsWith("data:image/jpeg") || url.startsWith("data:image/jpg")) {
+    return "image/jpeg";
+  }
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+  // PNG, WebP, GIF, and anything unrecognised — assume alpha is possible.
+  return "image/png";
+}
+
 // ─────────────────────────── Request building ─────────────────────────────
 
 export type EditRequest = {
@@ -150,6 +173,7 @@ export async function resolveWireImages(
         // which is exactly what a local clean image needs.
         annotations: needsComposite ? ref.annotations : [],
         maxPixels: cap,
+        mimeType: encodingFor(ref.url),
       });
       return dataUrl;
     }),
@@ -180,18 +204,47 @@ const IDLE: EditRenderState = { status: "idle" };
 export function useEditRender(sessionId: string) {
   const [state, setState] = React.useState<EditRenderState>(IDLE);
   const abortRef = React.useRef<AbortController | null>(null);
+  /** The version row appended for the run currently in flight, so an abort
+   *  can reconcile it. Cleared once the run settles it itself. */
+  const pendingVersionRef = React.useRef<string | null>(null);
+
+  /**
+   * Close out the in-flight version row.
+   *
+   * Without this an aborted render leaves a row stuck at `pending` forever —
+   * it renders a permanently spinning thumbnail, is never reconciled by
+   * anything (not even a remount, since the status is persisted), and eats
+   * one of the MAX_VERSIONS slots.
+   */
+  const settleAborted = React.useCallback(() => {
+    const versionId = pendingVersionRef.current;
+    if (!versionId) return;
+    pendingVersionRef.current = null;
+    patchVersion(sessionId, versionId, {
+      status: "failed",
+      error: "Cancelled.",
+    });
+  }, [sessionId]);
 
   // An in-flight render outliving the workspace would patch a version for a
   // session nobody is looking at, and leak the controller.
+  const settleAbortedRef = React.useRef(settleAborted);
+  settleAbortedRef.current = settleAborted;
   React.useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        settleAbortedRef.current();
+      }
+    };
   }, []);
 
   const cancel = React.useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    settleAborted();
     setState(IDLE);
-  }, []);
+  }, [settleAborted]);
 
   const render = React.useCallback(async () => {
     const session = getEditSession(sessionId);
@@ -229,6 +282,7 @@ export function useEditRender(sessionId: string) {
       outputs: [],
       status: "pending",
     } satisfies EditVersion);
+    pendingVersionRef.current = versionId;
     setState({ status: "running", versionId, warnings: req.warnings });
 
     try {
@@ -252,6 +306,15 @@ export function useEditRender(sessionId: string) {
       });
 
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+
+      // Check AFTER reading the body, not only before the fetch. An abort
+      // that lands once the response has started makes res.json() reject on
+      // the aborted stream; that rejection is swallowed above, res.ok is
+      // still true, and without this guard the code would take the success
+      // branch with zero outputs — reporting a render the model actually
+      // completed (and billed) as "Model returned no image", and skipping
+      // the Library write. cancel() has already settled the version row.
+      if (ctrl.signal.aborted) return;
 
       if (!res.ok) {
         const message =
@@ -289,10 +352,18 @@ export function useEditRender(sessionId: string) {
       });
 
       // Into the Library + Creations feed, exactly like any other render.
+      //
+      // The user's INSTRUCTION goes here, not req.prompt. The compiled prompt
+      // carries <point>/<bbox> tags and the raster prose, and asset.prompt is
+      // not just display text — the feed's "Reuse prompt" action seeds the
+      // Generator with it. Storing the compiled string would show coordinate
+      // markup in the feed and, worse, send those tags upstream as literal
+      // text on a plain text-to-image render. The compiled prompt is already
+      // preserved on the version record, which is where it belongs.
       for (const out of outputs) {
         stageGeneratedImage({
           url: out.url,
-          prompt: req.prompt,
+          prompt: session.instruction.trim(),
           model: req.model,
           size: out.size ?? req.size,
           seed: req.seed,
@@ -327,6 +398,11 @@ export function useEditRender(sessionId: string) {
       });
     } finally {
       if (abortRef.current === ctrl) abortRef.current = null;
+      // Only clear if this run still owns the row. A cancel will already have
+      // settled and cleared it, and a superseding run will have claimed it.
+      if (pendingVersionRef.current === versionId) {
+        pendingVersionRef.current = null;
+      }
     }
   }, [sessionId]);
 

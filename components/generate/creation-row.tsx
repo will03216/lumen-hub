@@ -48,6 +48,7 @@ function AssetRow({ asset }: { asset: Asset }) {
   const [busyPin, setBusyPin] = React.useState(false);
   const [busyDelete, setBusyDelete] = React.useState(false);
   const [busyEdit, setBusyEdit] = React.useState(false);
+  const [editError, setEditError] = React.useState<string | null>(null);
 
   /**
    * Create an edit session seeded with this asset, then soft-navigate to it.
@@ -64,6 +65,7 @@ function AssetRow({ asset }: { asset: Asset }) {
     e.stopPropagation();
     if (busyEdit) return;
     setBusyEdit(true);
+    setEditError(null);
     try {
       const session = await startEditSessionFromUrl({
         url: asset.mirrorUrl ?? asset.url,
@@ -74,9 +76,13 @@ function AssetRow({ asset }: { asset: Asset }) {
       // its state from the store, not from query params, so there's nothing
       // for a full page load to hydrate.
       router.push(`/edit/${session.id}`);
-    } catch {
-      // Measuring failed (expired signed URL, blocked host). Re-enable so
-      // the user can retry rather than being left with a dead control.
+    } catch (e) {
+      // Every failure here is one the user can act on — an expired signed
+      // URL, a mirror file that no longer exists, or a full localStorage
+      // (createEditSession throws by design in that case). Swallowing them
+      // leaves the pencil looking broken with no explanation, which is worse
+      // than the disabled "coming soon" pill this replaced.
+      setEditError(e instanceof Error ? e.message : "Could not open the editor.");
       setBusyEdit(false);
     }
   }
@@ -267,7 +273,27 @@ function AssetRow({ asset }: { asset: Asset }) {
               hard-navigates to the Video tab with this image seeded
               into the i2v starting-frame slot. Sits on a separate row
               from the brand badge so they don't visually compete. */}
-          {asset.kind === "image" && (
+          {editError && (
+            <div className="absolute inset-x-2 bottom-2 rounded-[8px] bg-bg/90 px-2 py-1.5 backdrop-blur-sm">
+              <div className="flex items-start gap-2">
+                <span className="flex-1 text-[11px] leading-snug text-[oklch(0.72_0.22_15)]">
+                  {editError}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditError(null);
+                  }}
+                  className="shrink-0 font-mono text-[10px] text-ink-mute hover:text-ink"
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          {asset.kind === "image" && !editError && (
             <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-bg/85 p-1 opacity-0 transition-opacity backdrop-blur-sm group-hover:opacity-100 focus-within:opacity-100">
               <IconButton
                 label={busyEdit ? "Opening editor…" : "Edit"}

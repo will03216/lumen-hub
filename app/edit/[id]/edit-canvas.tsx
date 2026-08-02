@@ -50,6 +50,7 @@ import {
   simplifyStroke,
 } from "@/lib/edit/geometry";
 import { clampToImage, fitContain, isInsideImage } from "@/lib/edit/coords";
+import { resolveSafeUrl } from "@/lib/edit/same-origin";
 // DraftAnnotation is defined next to buildAnnotation rather than here, so the
 // canvas and the agent tooling that lands later both produce marks through
 // one shape and one labelling path.
@@ -100,6 +101,7 @@ export default function EditCanvas({
 
   const [size, setSize] = React.useState({ w: 0, h: 0 });
   const [img, setImg] = React.useState<HTMLImageElement | null>(null);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
 
@@ -126,26 +128,52 @@ export default function EditCanvas({
   }, []);
 
   // ── Image loading ───────────────────────────────────────────────────────
-  // crossOrigin is set so the pixels stay readable for the P2 compositing
-  // path. It is harmless when the URL is same-origin, and for a cross-origin
-  // host that refuses CORS the load simply fails and we fall back below.
+  //
+  // Routed through resolveSafeUrl rather than loading reference.url raw. That
+  // matters at *display* time, not just when compositing: a BytePlus CDN URL
+  // sends no CORS header, so unconditionally setting crossOrigin made the
+  // first load fail every single time and only the fallback below ever
+  // rendered — a guaranteed double fetch on the main entry point.
+  //
+  // The fallback is still here for the hosts we cannot proxy (the media proxy
+  // is allow-listed to the BytePlus CDN family and 403s everything else). In
+  // that case the image displays but the canvas is tainted, so brush/arrow
+  // compositing will fail later with a message that says so.
   React.useEffect(() => {
     let cancelled = false;
+    const plan = resolveSafeUrl(reference.safeUrl ?? reference.url);
+    setLoadError(null);
+
+    const accept = (el: HTMLImageElement) => {
+      if (cancelled) return;
+      setImg(el);
+      setLoadError(null);
+    };
+
     const el = new window.Image();
-    el.crossOrigin = "anonymous";
-    el.onload = () => {
-      if (!cancelled) setImg(el);
-    };
+    if (plan.crossOrigin) el.crossOrigin = "anonymous";
+    el.onload = () => accept(el);
     el.onerror = () => {
-      // Retry without CORS: better to show the image and lose compositing
-      // than to show an empty canvas.
+      if (cancelled) return;
+      if (!plan.crossOrigin) {
+        // No CORS was requested, so there is nothing to retry — the URL is
+        // simply dead. Say so instead of leaving a blank canvas.
+        setLoadError("Could not load this image. It may have been moved or expired.");
+        return;
+      }
       const plain = new window.Image();
-      plain.onload = () => {
-        if (!cancelled) setImg(plain);
+      plain.onload = () => accept(plain);
+      plain.onerror = () => {
+        if (!cancelled) {
+          setLoadError(
+            "Could not load this image. It may have been moved or expired.",
+          );
+        }
       };
-      plain.src = reference.safeUrl ?? reference.url;
+      plain.src = plan.url;
     };
-    el.src = reference.safeUrl ?? reference.url;
+    el.src = plan.url;
+
     return () => {
       cancelled = true;
     };
@@ -157,6 +185,21 @@ export default function EditCanvas({
     setZoom(1);
     setPan({ x: 0, y: 0 });
   }, [reference.id]);
+
+  // Abandon any half-finished gesture when the tool changes. Without this,
+  // switching tools mid-drag leaves pointsRef populated from the old gesture,
+  // and the next brush stroke reads points[-2]/[-1] against a stale array —
+  // NaN into the decimation check. Currently unreachable (the rail is
+  // click-driven), and live the day a keyboard shortcut is added.
+  React.useEffect(() => {
+    drawingRef.current = false;
+    startRef.current = null;
+    pointsRef.current = [];
+    draftLineRef.current?.visible(false);
+    draftRectRef.current?.visible(false);
+    draftArrowRef.current?.visible(false);
+    draftLayerRef.current?.batchDraw();
+  }, [tool]);
 
   const fit = fitContain(size.w, size.h, imgW, imgH);
   const eff = fit.scale * zoom;
@@ -179,11 +222,19 @@ export default function EditCanvas({
     const p = pointer();
     if (!p) return;
 
-    // Clicking empty canvas clears the selection; clicking a shape is handled
-    // by that shape's own onClick, which stops propagation.
-    if (e.target === e.target.getStage()) onSelect(null);
+    // The base image sits in a listening={false} layer, so a click on the
+    // picture itself reports the Stage as its target; only a committed
+    // annotation reports a shape.
+    const onEmptyCanvas = e.target === e.target.getStage();
+    if (onEmptyCanvas) onSelect(null);
 
     if (tool === "point") {
+      // Clicking an existing mark should select it, not stack a new point on
+      // top of it. Its own onClick does the selecting; we just stay out of
+      // the way. Without this, the point tool cannot select anything — it
+      // creates a mark first and the shape's handler then reassigns the
+      // selection to the older one, so the new mark appears unselected.
+      if (!onEmptyCanvas) return;
       // Reject rather than clamp. A click in a letterbox band that silently
       // snapped to the image edge would look like a misplaced mark, not a
       // missed one — and the user gets no signal they aimed outside.
@@ -318,8 +369,16 @@ export default function EditCanvas({
   if (size.w === 0 || size.h === 0 || !img) {
     return (
       <div ref={wrapRef} className="size-full">
-        <div className="flex size-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">
-          {img ? "Measuring…" : "Loading image…"}
+        <div className="flex size-full items-center justify-center px-6 text-center">
+          {loadError ? (
+            <span className="max-w-[320px] text-[13px] leading-relaxed text-[oklch(0.72_0.22_15)]">
+              {loadError}
+            </span>
+          ) : (
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">
+              {img ? "Measuring…" : "Loading image…"}
+            </span>
+          )}
         </div>
       </div>
     );

@@ -12,10 +12,26 @@
  * a 400 the user can retry their way out of; in the editor it would burn a
  * render on every single attempt at a widescreen edit.
  *
- * So the editor computes its own size and guarantees the result is one the
- * selected model will actually accept. sizeForEdit is total-function: for any
- * model and any source image it returns a "WxH" for which isSizeAllowed() is
- * true. The test asserts exactly that across the whole model registry.
+ * So the editor computes its own size. sizeForEdit is a total function: for
+ * any model and any source image it returns a "WxH" for which isSizeAllowed()
+ * is true, and the test asserts that across the whole model registry.
+ *
+ * SCOPE OF THAT GUARANTEE — it covers the ceiling only. isSizeAllowed()
+ * checks `px <= cap` and nothing else, so "the model will accept this" is a
+ * stronger claim than anything here can make. Two open gaps, both inherited
+ * rather than introduced:
+ *
+ *   · lib/studio/models.ts asserts a Seedream LOWER bound of ~3.7 M px in two
+ *     places, and nothing anywhere enforces it. MIN_TOTAL_PIXELS below is
+ *     262,144 — the *input* floor from the BytePlus docs, which is a
+ *     different number for a different thing. If the 3.7 M output floor is
+ *     real, a 16:9 source at 1K quality (2048x1152 = 2.36 M) is rejected, and
+ *     so is every size pickImageSize produces at those settings. That needs
+ *     one authoritative number from the API before either file can enforce it.
+ *
+ *   · Extreme aspects bottom out at a 128 px short side (16:1 at 1K gives
+ *     2048x128) because the floor here is on total pixels. PRD §12.6 lists a
+ *     512 px per-side minimum that nothing checks.
  *
  * Two deliberate choices worth knowing:
  *

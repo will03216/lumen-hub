@@ -100,13 +100,23 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 
 let cachedList: EditSessionMeta[] | null = null;
-/** Single-session cache. Holding the id alongside the value means a switch
- *  between sessions invalidates correctly without a Map that grows forever. */
-let cachedSession: { id: string; value: EditSession | null } | null = null;
+
+/**
+ * Per-session snapshot cache, keyed by id.
+ *
+ * A single slot would be smaller and is a trap: the moment two components
+ * subscribe to different sessions in the same tree — a version-restore
+ * preview, a compare panel, the agent panel — they evict each other on every
+ * render pass, useSyncExternalStore sees a new object identity on each
+ * consistency check, and React re-renders forever. The symptom is a frozen
+ * tab with no error, and the cause is nowhere near the component that
+ * triggered it. A Map costs one entry per session actually opened.
+ */
+const cachedSessions = new Map<string, EditSession | null>();
 
 function invalidate(): void {
   cachedList = null;
-  cachedSession = null;
+  cachedSessions.clear();
 }
 
 export function subscribeEditSessions(cb: Listener): () => void {
@@ -132,10 +142,8 @@ export function getEditSessionsServerSnapshot(): EditSessionMeta[] | null {
  * getEditSession(id).
  */
 export function getSessionSnapshot(id: string): EditSession | null {
-  if (cachedSession === null || cachedSession.id !== id) {
-    cachedSession = { id, value: getEditSession(id) };
-  }
-  return cachedSession.value;
+  if (!cachedSessions.has(id)) cachedSessions.set(id, getEditSession(id));
+  return cachedSessions.get(id) ?? null;
 }
 
 export function getSessionServerSnapshot(): EditSession | null {
@@ -333,12 +341,22 @@ export function setAnnotations(
  * UI so every caller — canvas, preset, agent tool — hits the same ceiling.
  * An add that would exceed it is dropped rather than evicting an older mark,
  * because silently deleting someone's work is worse than refusing the new one.
+ *
+ * Returns false when the add was refused, so the caller can say so. Without
+ * that, the user drags a box, nothing appears, and there is no explanation
+ * anywhere — and the caller goes on to select an id that was never stored.
  */
 export function upsertAnnotation(
   sessionId: string,
   refId: string,
   ann: Annotation,
-): void {
+): boolean {
+  const ref = getEditSession(sessionId)?.refs.find((r) => r.id === refId);
+  const isNew = ref ? !ref.annotations.some((a) => a.id === ann.id) : false;
+  if (ref && isNew && ref.annotations.length >= MAX_ANNOTATIONS_PER_REF) {
+    return false;
+  }
+
   mutate(sessionId, (s) => ({
     ...s,
     refs: s.refs.map((r) => {
@@ -353,6 +371,7 @@ export function upsertAnnotation(
       return { ...r, annotations: [...r.annotations, ann] };
     }),
   }));
+  return true;
 }
 
 export function removeAnnotation(

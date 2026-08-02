@@ -207,6 +207,28 @@ describe("annotation caps", () => {
     expect(anns.some((a) => a.id === "overflow")).toBe(false);
   });
 
+  it("reports whether the add was accepted", () => {
+    // The canvas selects the mark it just created. If a refused add returned
+    // nothing, the caller would select an id that was never stored — the
+    // panel highlights nothing, the canvas has no such shape, and the user
+    // gets no explanation for why their box didn't appear.
+    const s = createEditSession({
+      baseRef: { url: "/a.png", width: 100, height: 100 },
+    });
+    const refId = s.refs[0].id;
+
+    for (let i = 0; i < MAX_ANNOTATIONS_PER_REF; i++) {
+      expect(upsertAnnotation(s.id, refId, point(`a${i}`))).toBe(true);
+    }
+    expect(upsertAnnotation(s.id, refId, point("overflow"))).toBe(false);
+
+    // Replacing an existing mark is always allowed — it doesn't grow the
+    // list, so the cap has nothing to say about it.
+    expect(
+      upsertAnnotation(s.id, refId, { ...point("a0"), note: "edited" }),
+    ).toBe(true);
+  });
+
   it("replaces by id instead of appending a duplicate", () => {
     const s = createEditSession({
       baseRef: { url: "/a.png", width: 100, height: 100 },
