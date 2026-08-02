@@ -19,8 +19,8 @@ import {
   getEditSessionsServerSnapshot,
   getEditSessionsSnapshot,
   subscribeEditSessions,
-  type EditSessionMeta,
 } from "@/lib/edit/sessions";
+import type { EditSessionMeta } from "@/lib/edit/types";
 import {
   startEditSessionFromFile,
   startEditSessionFromUrl,

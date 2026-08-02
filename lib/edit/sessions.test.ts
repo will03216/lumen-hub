@@ -307,14 +307,43 @@ describe("duplicate", () => {
 });
 
 describe("write failures", () => {
-  it("surfaces a quota error instead of swallowing it", () => {
+  /**
+   * Force the store's write to fail, deterministically.
+   *
+   * This does NOT patch localStorage, which is the obvious approach and does
+   * not work here. Under happy-dom the global `Storage` is not the actual
+   * prototype of the `localStorage` instance, so patching `Storage.prototype`
+   * silently does nothing; the instance itself is proxy-backed, so assigning
+   * `localStorage.setItem` lands but the call never observes it; and patching
+   * the real prototype behaves inconsistently between tests in the same file.
+   * Every one of those fails by making the store look like it swallowed an
+   * error it was never actually given — the test accuses the wrong code.
+   *
+   * writeStore does `localStorage.setItem(KEY, JSON.stringify(store))` inside
+   * its try, so failing the serialization exercises exactly the same catch
+   * with none of the DOM ambiguity. JSON is a plain writable global.
+   *
+   * Assertions stay OUTSIDE the callback: vitest's own matchers serialize
+   * values, so asserting while stringify is broken would break the assertion
+   * rather than the code under test.
+   */
+  function withFailingWrite(fn: () => void): void {
+    const original = JSON.stringify;
+    JSON.stringify = () => {
+      throw new DOMException("exceeded the quota", "QuotaExceededError");
+    };
+    try {
+      fn();
+    } finally {
+      JSON.stringify = original;
+    }
+  }
+
+  it("surfaces a write failure instead of swallowing it", () => {
     const s = createEditSession({ name: "A" });
     expect(lastWriteError()).toBeNull();
 
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("exceeded the quota", "QuotaExceededError");
-    });
-    updateEditSession(s.id, { instruction: "big" });
+    withFailingWrite(() => updateEditSession(s.id, { instruction: "big" }));
 
     expect(lastWriteError()).toMatch(/quota/i);
   });
@@ -323,23 +352,25 @@ describe("write failures", () => {
     // The caller navigates to /edit/<id> on success. If a failed create
     // returned normally, that navigation would land on "Session not found",
     // which reads as data loss instead of a full disk.
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("exceeded the quota", "QuotaExceededError");
+    let thrown: unknown;
+    withFailingWrite(() => {
+      try {
+        createEditSession({ name: "A" });
+      } catch (e) {
+        thrown = e;
+      }
     });
-    expect(() => createEditSession({ name: "A" })).toThrow(/could not save/i);
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/could not save/i);
   });
 
   it("clears the error once a write succeeds again", () => {
     const s = createEditSession({ name: "A" });
-    const spy = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(() => {
-        throw new DOMException("exceeded the quota", "QuotaExceededError");
-      });
-    updateEditSession(s.id, { instruction: "big" });
+
+    withFailingWrite(() => updateEditSession(s.id, { instruction: "big" }));
     expect(lastWriteError()).not.toBeNull();
 
-    spy.mockRestore();
     updateEditSession(s.id, { instruction: "small" });
     expect(lastWriteError()).toBeNull();
   });
