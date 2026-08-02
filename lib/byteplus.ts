@@ -959,6 +959,60 @@ export type ChatWithToolsResult = {
   usage?: Record<string, unknown>;
 };
 
+/**
+ * The model the EDITOR uses for language work — the agent and prompt
+ * enhancement.
+ *
+ * Pinned here rather than inheriting PROMPT_MODEL, which defaults to the Lite
+ * model and is shared with story-prompt generation. The editor's agent drives
+ * twelve tools and does coordinate arithmetic; Lite is not the right tier for
+ * that, and inheriting a default meant for something else meant the agent was
+ * silently running on Lite whenever BYTEPLUS_PROMPT_MODEL was unset — which
+ * is the case on a stock deployment.
+ *
+ * Override with BYTEPLUS_EDIT_MODEL if an account does not have Pro enabled.
+ */
+export const EDIT_MODEL =
+  process.env.BYTEPLUS_EDIT_MODEL ?? "seed-2-0-pro-260328";
+
+/**
+ * One text-in, text-out turn. No tools, no images.
+ *
+ * Separate from chatWithTools because `tools` is required there and an empty
+ * array is not the same request — some endpoints reject it, and `tool_choice`
+ * has no meaning without them.
+ */
+export async function chatText(
+  p: {
+    system: string;
+    user: string;
+    model?: string;
+    maxTokens?: number;
+    temperature?: number;
+  },
+  apiKey?: string,
+): Promise<string> {
+  const out = await request<{
+    choices?: Array<{ message?: { content?: string | null } }>;
+  }>(
+    "/chat/completions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: resolveModel(p.model ?? PROMPT_MODEL),
+        messages: [
+          { role: "system", content: p.system },
+          { role: "user", content: p.user },
+        ],
+        max_tokens: p.maxTokens ?? 1000,
+        ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
+      }),
+    },
+    apiKey,
+  );
+  return out.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 export async function chatWithTools(
   p: ChatWithToolsParams,
   apiKey?: string,

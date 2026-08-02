@@ -39,6 +39,7 @@ export type RouteTag =
   | "edit.agent"
   | "edit.layers"
   | "edit.curl"
+  | "edit.enhance"
   | "user-keys.lookup";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,

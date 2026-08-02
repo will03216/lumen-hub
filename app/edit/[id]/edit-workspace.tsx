@@ -50,7 +50,7 @@ import { ResultView } from "./result-view";
 import { ReferencesPanel } from "./references-panel";
 import { CanvasBoundary } from "./canvas-boundary";
 import { LayersPanel } from "./layers-panel";
-import { PresetStrip } from "./preset-strip";
+import { EnhanceButton } from "./enhance-button";
 import { PayloadInspector } from "./payload-inspector";
 import { RequestCurl } from "./request-curl";
 
@@ -349,8 +349,14 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
           </div>
         </div>
 
-        {/* Agent + marks + versions */}
-        <aside className="space-y-6">
+        {/* Agent + marks + versions.
+            Height-capped to the canvas beside it, and scrolled internally.
+            Without the cap this column grows with every mark and version, the
+            grid row grows with it, and the prompt bar below — which is where
+            Render lives — walks off the bottom of the screen. The panel that
+            gets longer as you work must not be the one that decides where the
+            controls are. */}
+        <aside className="space-y-6 lg:max-h-[calc(min(68vh,720px)+2rem)] lg:overflow-y-auto lg:pr-1">
           {/* The agent drives the same tools the rail does, so its marks show
               up in the panel below and can be corrected by hand. */}
           <AgentPanel
@@ -438,21 +444,6 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             is what they write into. §4's competitive read was that presets
             ARE the demo: an empty canvas is where a demo dies in the first
             thirty seconds. */}
-        <PresetStrip
-          // Hidden marks don't count: the compiler drops them, so a canvas
-          // whose only mark is hidden sends no coordinates at all — and a
-          // "remove the marked object" preset would then be a confident,
-          // unscoped edit.
-          hasMark={annotations.some((a) => !a.hidden)}
-          onApply={(instruction) => {
-            // Straight through the buffered field so the textarea updates
-            // immediately, then flushed so Render doesn't read stale text
-            // if it is clicked inside the debounce window.
-            instructionField.onChange(instruction);
-            instructionField.flush();
-          }}
-        />
-
         <textarea
           value={instructionField.value}
           onChange={(e) => instructionField.onChange(e.target.value)}
@@ -460,6 +451,22 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
           placeholder="Describe the edit — e.g. “replace the tabletop with dark walnut, keep the candle and the lighting unchanged”"
           rows={2}
           className="w-full resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-ink-mute"
+        />
+
+        {/* Was a strip of preset sentences. An enhance acts on what the user
+            actually wrote, which covers the cases nobody thought of in
+            advance — and it never touches the compiled tag block. */}
+        <EnhanceButton
+          instruction={instructionField.value}
+          refs={session.refs}
+          annotations={annotations}
+          onEnhanced={(text) => {
+            // Through the buffered field so the textarea updates immediately,
+            // then flushed so Render cannot read the pre-enhance text if it is
+            // clicked inside the debounce window.
+            instructionField.onChange(text);
+            instructionField.flush();
+          }}
         />
 
         <div className="flex flex-wrap items-center gap-2">

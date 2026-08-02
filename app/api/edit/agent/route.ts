@@ -26,6 +26,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   BytePlusError,
+  EDIT_MODEL,
   chatWithTools,
   type ChatMessage,
 } from "@/lib/byteplus";
@@ -110,6 +111,12 @@ export async function POST(req: NextRequest) {
       {
         messages: [{ role: "system", content: SYSTEM }, ...body.messages],
         tools: toOpenAIToolDefs(),
+        // Pinned, not inherited. chatWithTools defaults to PROMPT_MODEL, which
+        // falls back to the LITE model and is shared with story prompts — so
+        // on a stock deployment this agent was quietly running on Lite while
+        // every doc and comment said Pro. Twelve tools and coordinate
+        // arithmetic are not a Lite workload.
+        model: EDIT_MODEL,
         maxTokens: MAX_TOKENS,
       },
       keys.byteplus,
@@ -119,6 +126,7 @@ export async function POST(req: NextRequest) {
     // with nothing usable is exactly the case that reads as "the agent is
     // stuck", and it is invisible in the logs otherwise.
     logRouteOutcome("edit.agent", startedAt, {
+      model: EDIT_MODEL,
       finish_reason: result.finishReason,
       tool_calls: result.toolCalls?.length ?? 0,
       has_content: Boolean(result.content?.trim()),
