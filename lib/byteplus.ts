@@ -167,7 +167,29 @@ export type ImageGenResponse = {
   usage?: Record<string, unknown>;
 };
 
-export async function generateImage(params: ImageGenParams, apiKey?: string) {
+/** The one image-generation path, exported so a caller that needs to SHOW the
+ *  request (the editor's copy-as-cURL) points at the same URL we post to. */
+export const IMAGE_GENERATIONS_PATH = "/images/generations";
+
+/** Absolute endpoint, including whatever BYTEPLUS_BASE_URL is configured to
+ *  on THIS deployment. Server-only by nature — the base URL is not a public
+ *  env var, so anything client-side would silently print the default. */
+export function bytePlusEndpoint(path: string): string {
+  return `${BASE_URL}${path}`;
+}
+
+/**
+ * The exact JSON body `generateImage` puts on the wire.
+ *
+ * Extracted so the copy-as-cURL feature renders the real request rather than
+ * a second, hand-maintained guess at it. Model alias resolution and every
+ * default (response_format, watermark, size) live here, which is precisely
+ * the part a reimplementation would get wrong and nobody would notice until
+ * a demo. Pure — no I/O, no key.
+ */
+export function buildImageGenBody(
+  params: ImageGenParams,
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: resolveModel(params.model ?? IMAGE_MODEL),
     response_format: "url",
@@ -186,9 +208,13 @@ export async function generateImage(params: ImageGenParams, apiKey?: string) {
       };
     }
   }
-  return request<ImageGenResponse>("/images/generations", {
+  return body;
+}
+
+export async function generateImage(params: ImageGenParams, apiKey?: string) {
+  return request<ImageGenResponse>(IMAGE_GENERATIONS_PATH, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildImageGenBody(params)),
   }, apiKey);
 }
 

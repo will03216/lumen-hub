@@ -51,6 +51,7 @@ import { ReferencesPanel } from "./references-panel";
 import { CanvasBoundary } from "./canvas-boundary";
 import { LayersPanel } from "./layers-panel";
 import { PresetStrip } from "./preset-strip";
+import { RequestCurl } from "./request-curl";
 
 /** Kill switch for §5B. Set NEXT_PUBLIC_EDIT_LAYERS=0 to hide the panel. */
 const LAYERS_ENABLED = process.env.NEXT_PUBLIC_EDIT_LAYERS !== "0";
@@ -549,9 +550,16 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             onClick={() => setShowCompiled((v) => !v)}
             className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink-dim"
           >
-            {showCompiled ? "▾" : "▸"} show compiled prompt
+            {showCompiled ? "▾" : "▸"} show compiled prompt & request
           </button>
-          {showCompiled && <CompiledPrompt session={session} />}
+          {showCompiled && (
+            <>
+              <CompiledPrompt session={session} />
+              {/* The other half of "what did it actually send?" — the wire
+                  request, with the key left out. */}
+              <RequestCurl session={session} />
+            </>
+          )}
         </div>
       </div>
     </div>
