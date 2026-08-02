@@ -414,6 +414,41 @@ export function patchVersion(
   }));
 }
 
+/**
+ * Put the session back into the state that produced a given version.
+ *
+ * Restores the instruction AND the marks, which is the whole point — a
+ * version's pixels are only reproducible alongside the annotations that
+ * generated them, and "restore" that silently dropped the marks would leave
+ * the user looking at an instruction whose regions no longer exist.
+ *
+ * Marks are restored per reference, and only for references that still
+ * exist: a ref deleted since the render has nowhere to put its annotations,
+ * and inventing one would resurrect an image the user removed.
+ *
+ * Returns false when the version is unknown, so the caller can say so rather
+ * than silently doing nothing.
+ */
+export function restoreVersion(sessionId: string, versionId: string): boolean {
+  const session = getEditSession(sessionId);
+  const version = session?.versions.find((v) => v.id === versionId);
+  if (!session || !version) return false;
+
+  mutate(sessionId, (s) => ({
+    ...s,
+    instruction: version.instruction,
+    model: version.model,
+    seed: version.seed,
+    refs: s.refs.map((r) => {
+      const snapshot = version.annotationsSnapshot[r.id];
+      // No entry means this ref did not exist at the time. Leave its current
+      // marks alone rather than clearing them.
+      return snapshot ? { ...r, annotations: snapshot } : r;
+    }),
+  }));
+  return true;
+}
+
 export function upsertLayerSet(sessionId: string, set: LayerSet): void {
   mutate(sessionId, (s) => {
     const idx = s.layerSets.findIndex((l) => l.id === set.id);

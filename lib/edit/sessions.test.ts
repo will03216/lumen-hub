@@ -35,6 +35,7 @@ import {
   lastWriteError,
   listEditSessions,
   removeAnnotation,
+  restoreVersion,
   subscribeEditSessions,
   updateEditSession,
   upsertAnnotation,
@@ -296,6 +297,55 @@ describe("versions", () => {
     expect(s.coverUrl).toBe("/base.png");
     appendVersion(s.id, version("v1"));
     expect(getEditSession(s.id)!.coverUrl).toBe("https://cdn.example/v1.png");
+  });
+});
+
+describe("restoreVersion", () => {
+  it("brings back the instruction AND the marks", () => {
+    // A version's pixels are only reproducible alongside the annotations that
+    // produced them. Restoring the instruction alone leaves the user reading
+    // a sentence about regions that no longer exist.
+    const s = createEditSession({
+      baseRef: { url: "/a.png", width: 100, height: 100 },
+      instruction: "original",
+    });
+    const refId = s.refs[0].id;
+
+    appendVersion(s.id, {
+      ...version("v1"),
+      instruction: "make it walnut",
+      annotationsSnapshot: { [refId]: [point("m1"), point("m2")] },
+    });
+
+    // Diverge from that state.
+    updateEditSession(s.id, { instruction: "something else" });
+    upsertAnnotation(s.id, refId, point("m3"));
+
+    expect(restoreVersion(s.id, "v1")).toBe(true);
+
+    const after = getEditSession(s.id)!;
+    expect(after.instruction).toBe("make it walnut");
+    expect(after.refs[0].annotations.map((a) => a.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("leaves a ref alone when the version has no snapshot for it", () => {
+    // The ref was added after the render. Clearing its marks would delete
+    // work the version knows nothing about.
+    const s = createEditSession({
+      baseRef: { url: "/a.png", width: 100, height: 100 },
+    });
+    appendVersion(s.id, { ...version("v1"), annotationsSnapshot: {} });
+    upsertAnnotation(s.id, s.refs[0].id, point("later"));
+
+    restoreVersion(s.id, "v1");
+    expect(
+      getEditSession(s.id)!.refs[0].annotations.map((a) => a.id),
+    ).toEqual(["later"]);
+  });
+
+  it("reports an unknown version instead of silently doing nothing", () => {
+    const s = createEditSession({ name: "A" });
+    expect(restoreVersion(s.id, "nope")).toBe(false);
   });
 });
 

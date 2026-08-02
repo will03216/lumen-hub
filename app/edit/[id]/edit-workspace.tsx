@@ -24,6 +24,7 @@ import {
   lastWriteError,
   newEditId,
   removeAnnotation,
+  restoreVersion,
   updateEditSession,
   upsertAnnotation,
 } from "@/lib/edit/sessions";
@@ -43,6 +44,7 @@ import type { EditTool } from "./edit-canvas";
 import { ToolRail } from "./tool-rail";
 import { AnnotationPanel } from "./annotation-panel";
 import { AgentPanel } from "./agent-panel";
+import { ResultView } from "./result-view";
 
 const ASPECTS = [
   { id: "source", label: "Source" },
@@ -230,15 +232,23 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         <div className="space-y-2">
           <div className="h-[min(68vh,720px)] overflow-hidden rounded-[14px] border border-border bg-panel">
             {viewing?.outputs[0]?.url ? (
-              <div className="flex size-full items-center justify-center p-4">
-                {/* eslint-disable-next-line @next/next/no-img-element -- remote
-                    CDN hosts aren't in the image optimizer's allow-list. */}
-                <img
-                  src={viewing.outputs[0].url}
-                  alt="Edited result"
-                  className="max-h-full max-w-full object-contain"
-                />
-              </div>
+              <ResultView
+                version={viewing}
+                sourceUrl={activeRef?.url ?? null}
+                sourceWidth={activeRef?.width ?? 0}
+                sourceHeight={activeRef?.height ?? 0}
+                // The marks that produced THIS version, not what is on the
+                // canvas now — otherwise the overlay misreports what was asked.
+                annotations={
+                  activeRefId
+                    ? (viewing.annotationsSnapshot[activeRefId] ?? [])
+                    : []
+                }
+                onRestore={() => {
+                  restoreVersion(sessionId, viewing.id);
+                  setShowCanvas(true);
+                }}
+              />
             ) : activeRef ? (
               <EditCanvasLoader
                 reference={activeRef}
