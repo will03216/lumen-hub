@@ -760,6 +760,99 @@ export function buildComposeCurl(p: ComposePromptParams): string {
   ].join("\n");
 }
 
+// ---------- Tool-calling chat (agent loop) ----------
+/**
+ * Multi-turn chat with tool calling, for the Edit tab's agent.
+ *
+ * Uses `/chat/completions` — the OpenAI-compatible shape — rather than
+ * `/responses`, even though shouldUseResponsesApi() routes seed-2-0-pro to
+ * the latter for prompt writing. Tool calling is documented against
+ * chat/completions, the `tool_calls` / `role:"tool"` round trip is the shape
+ * every OpenAI-compatible client already speaks, and the agent loop needs a
+ * stable multi-turn transcript rather than a one-shot completion.
+ *
+ * Unlike the other helpers here this one does NOT own its prompt. The caller
+ * passes the whole transcript, because the loop lives on the client (the edit
+ * session is in localStorage and the server can't see it) and this route is
+ * one stateless turn of it.
+ */
+export type ChatToolDef = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type ChatToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+/** Content blocks accepted on a user turn. Images ride as data URIs or
+ *  public https URLs, per the OpenAI vision shape. */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ChatMessage =
+  | { role: "system" | "user"; content: string | ChatContentPart[] }
+  | { role: "assistant"; content?: string | null; tool_calls?: ChatToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+export type ChatWithToolsParams = {
+  messages: ChatMessage[];
+  tools: ChatToolDef[];
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+};
+
+export type ChatWithToolsResult = {
+  /** The assistant's visible text, if any. Absent on a pure tool turn. */
+  content: string | null;
+  toolCalls: ChatToolCall[];
+  /** "tool_calls" when the model wants tools run; "stop" when it's done. */
+  finishReason: string | null;
+  usage?: Record<string, unknown>;
+};
+
+export async function chatWithTools(
+  p: ChatWithToolsParams,
+  apiKey?: string,
+): Promise<ChatWithToolsResult> {
+  const body = {
+    model: resolveModel(p.model ?? PROMPT_MODEL),
+    messages: p.messages,
+    tools: p.tools,
+    tool_choice: "auto",
+    max_tokens: p.maxTokens ?? 4096,
+    ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
+  };
+
+  const out = await request<{
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+        tool_calls?: ChatToolCall[];
+      };
+      finish_reason?: string;
+    }>;
+    usage?: Record<string, unknown>;
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
+
+  const choice = out.choices?.[0];
+  return {
+    content: choice?.message?.content ?? null,
+    // Normalised to an array so callers never branch on undefined.
+    toolCalls: choice?.message?.tool_calls ?? [],
+    finishReason: choice?.finish_reason ?? null,
+    usage: out.usage,
+  };
+}
+
 // ---------- Video ----------
 export type VideoMode = "t2v" | "i2v" | "first_last" | "multi_shot";
 

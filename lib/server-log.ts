@@ -36,6 +36,7 @@ export type RouteTag =
   | "video.enhance.poll"
   | "article-to-prompt"
   | "optimize-prompt"
+  | "edit.agent"
   | "user-keys.lookup";
 
 /** One-line structured emit. JSON per line so `vercel logs | jq` works,

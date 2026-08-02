@@ -45,6 +45,7 @@ import EditCanvasLoader from "./canvas-loader";
 import type { EditTool } from "./edit-canvas";
 import { ToolRail } from "./tool-rail";
 import { AnnotationPanel } from "./annotation-panel";
+import { AgentPanel } from "./agent-panel";
 
 const ASPECTS = [
   { id: "source", label: "Source" },
@@ -219,7 +220,7 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[164px_1fr_280px]">
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[164px_1fr_320px]">
         {/* Tools */}
         <ToolRail
           tool={tool}
@@ -288,8 +289,12 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
           </div>
         </div>
 
-        {/* Marks + versions */}
+        {/* Agent + marks + versions */}
         <aside className="space-y-6">
+          {/* The agent drives the same tools the rail does, so its marks show
+              up in the panel below and can be corrected by hand. */}
+          <AgentPanel sessionId={sessionId} onRender={render} />
+
           <div className="space-y-2">
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
               Marks

@@ -2,7 +2,7 @@
 
 **Status:** Draft · **Owner:** Mittul Madaan · **Date:** 2026-08-02
 **Target image model:** Seedream 5.0 Pro (`dola-seedream-5-0-pro-260628`)
-**Target agent model:** Claude Opus 5 (`claude-opus-5`)
+**Target agent model:** Seed 2.0 Pro (`seed-2-0-pro-260328`, BytePlus ModelArk)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Add a fourth creative surface to Lumen Hub — **Edit** — a canvas-based image editor where a customer loads an image, marks it up with professional-editor tools (point, box, brush, arrow), describes the change in plain language, and gets back a precisely-scoped edit from Seedream 5.0 Pro.
 
-On top of the canvas sits an **agent**: the user says *"remove the paper ball and make the table walnut"*, and Claude places the annotations, writes the Seedream prompt, runs the render, looks at the result, and iterates — using the exact same tool surface the human uses.
+On top of the canvas sits an **agent**: the user says *"remove the paper ball and make the table walnut"*, and Seed 2.0 Pro places the annotations, writes the Seedream prompt, runs the render, looks at the result, and iterates — using the exact same tool surface the human uses.
 
 The editor doubles as the demo vehicle for Seedream 5.0 Pro's differentiating features: interactive region control, layer separation into transparent PNGs, multi-image fusion, sketch-to-image, exact colour/material response, and multilingual text rendering.
 
@@ -101,7 +101,7 @@ Hex swatch picker injecting exact colour codes, a material preset list (brushed 
 
 ### 5E. Agentic editing *(the differentiator)*
 
-A chat panel beside the canvas. The user states intent; Claude Opus 5 drives the editor through the **same tool surface the UI uses**, and every action it takes is visible as a real annotation on the canvas — not a hidden side channel.
+A chat panel beside the canvas. The user states intent; Seed 2.0 Pro drives the editor through the **same tool surface the UI uses**, and every action it takes is visible as a real annotation on the canvas — not a hidden side channel.
 
 ```
 User:  "remove the crumpled paper on the left and make the table dark walnut"
@@ -400,29 +400,25 @@ Modelled on the guidance that hard-to-reverse actions deserve dedicated tools so
 
 ```ts
 // app/api/edit/agent/route.ts — one turn, no loop, no streaming
-const message = await client.messages.create({
-  model: "claude-opus-5",
-  max_tokens: 16000,
-  thinking: { type: "adaptive" },
-  output_config: { effort: "high" },
-  system: buildEditorSystem(session),   // grounded, cached
-  tools: EDIT_TOOLS,                    // stable order — cache prefix
-  messages,                             // image block carries cache_control
-});
+const result = await chatWithTools(
+  {
+    messages: [{ role: "system", content: SYSTEM }, ...body.messages],
+    tools: toOpenAIToolDefs(),   // stable order
+    maxTokens: 4096,
+  },
+  keys.byteplus,                 // already a REQUIRED provider
+);
 ```
 
 | Choice | Value | Rationale |
 |---|---|---|
-| Model | `claude-opus-5` | Vision with 1:1 pixel coordinates and 2576px long edge — required for grounding. Agentic tool use is its strongest axis |
-| Thinking | `{type:"adaptive"}` | On by default for this model; `budget_tokens` is **rejected with a 400** |
-| Effort | `high` | Start here, sweep `medium`/`xhigh` per §10 R7 |
+| Model | `seed-2-0-pro-260328` | Vision-capable and already the app's prompt model. Decisive factor: BytePlus is **already a required BYOK provider**, so the agent needs no new credential, no new Settings field, and no second vendor in a product built around BytePlus models. Also far cheaper per turn than a frontier model |
+| Endpoint | `/chat/completions` | Tool calling is documented against it, and the `tool_calls` / `role:"tool"` round trip is the shape every OpenAI-compatible client speaks. Note `shouldUseResponsesApi` routes this model to `/responses` for prompt writing — the agent deliberately does not follow that |
 | Streaming | none | Turn-level UI; avoids the codebase's first SSE route |
-| Tool loop | client-side, manual | The client owns state; also sidesteps whether `@anthropic-ai/sdk@0.99` exposes the beta tool runner |
-| Cache | `cache_control` on tools+system and on the image block | Render order is tools → system → messages |
+| Tool loop | client-side, manual | The client owns the state |
+| Tool defs | one list, converted | Authored in the flatter Anthropic shape and converted by `toOpenAIToolDefs()`. Two hand-maintained lists drift, and a tool present in one but not the other either can't be called or is called and doesn't exist |
 
-**Prompt caching is the cost story.** A 2576px canvas snapshot is ~4,800 input tokens and is re-sent every turn. Cached, those turns bill at ~0.1×. Two rules follow, both easy to violate: **the tool array must be serialized in a stable order** (it renders at position 0 — any reorder invalidates everything), and **nothing volatile may precede the breakpoint** — no timestamp, no session id, no annotation count in the system prompt header. Opus 5's cacheable minimum is 512 tokens, so the image alone clears it comfortably.
-
-The image block is re-cached only when the canvas actually changes — after a render or a manual edit — not on every turn.
+**Provider portability was designed in, not retrofitted.** `agent-tools.ts` — the schemas plus the coordinate-rescale logic, which is the expensive and correctness-critical part — has no provider import at all. Swapping models touches the route's wire format and nothing else.
 
 ### 8.4 Grounding the agent
 
@@ -432,11 +428,13 @@ Add a sibling `claude_skill/seedream.md` + `references/` covering: the four anno
 
 **Deployment gotcha with teeth:** `next.config.ts` lines 27–34 list `outputFileTracingIncludes` for the five routes that read skill docs. **A new route that reads them and isn't added to that list will silently ship without its docs** — degrading to the embedded fallback with no error. Add `app/api/edit/agent/route.ts` there.
 
-### 8.5 Claude BYOK — fix the pattern, don't propagate it
+### 8.5 Credentials — nothing new required
 
-Claude is currently **outside** the encrypted BYOK system. Both existing routes take `body.claudeApiKey` from the browser, sourced from a field on a studio node and persisted in localStorage. Every other provider — BytePlus, fal, Minimax — goes through `user_api_keys` with AES-256-GCM at rest and `getUserKeys()` server-side.
+The agent authenticates with `keys.byteplus`, which every user must already have saved: it is in `REQUIRED_PROVIDERS` and the onboarding gate blocks the app without it. No new provider, no new Settings field, no migration — `user_api_keys.provider` is plain `TEXT` with no CHECK constraint, but nothing needs to be added to it either.
 
-The Edit agent must not extend the localStorage-key pattern. Add `anthropic` to the BYOK system: the `switch` and `UserKeys` type in `lib/server/user-keys.ts`, `FIELD_TO_PROVIDER` and `FIELDS` in `app/settings/page.tsx`, and `REQUIRED_PROVIDERS` in `/api/user/keys`. Roughly a 40-line change that also lets the two existing routes migrate later.
+An earlier draft of this PRD specified Claude Opus 5 and the BYOK plumbing to support it. That work was written and then reverted when the provider changed. Worth recording why the reversal was cheap: the agent's tool surface carries no provider dependency, so only the route's wire format moved.
+
+Separately, and still true: the two existing Claude routes (`optimize-prompt`, `article-to-prompt`) take their key from the browser POST body via localStorage rather than the encrypted store. That predates this table and should migrate; new code must not extend the pattern.
 
 ## 9. Phasing
 
@@ -464,7 +462,8 @@ Roughly 14–17 engineering days.
 | **R4** | **`usesAdaptiveThinking()` doesn't match `claude-opus-5`** — the regex in `app/api/optimize-prompt/route.ts` covers `opus-4-(6\|7\|8)` only, so Opus 5 falls to the `budget_tokens` branch, **which 400s** | High | The Edit agent route must not copy that helper. Fix the regex in both existing routes as part of P4 |
 | **R5** | **Agent coordinate drift.** If the canvas snapshot is downscaled and `1/s` isn't applied, every mark is consistently offset — reads as model imprecision, not a bug | High | `s` is computed and applied in one executor; round-trip property test on a downscaled fixture; a visible "agent placed this" badge so offsets are noticed in QA |
 | **R6** | **Agent cost.** ~4,800 image tokens/turn plus tool schemas; an uncached 10-turn session is expensive | Med | Cache breakpoint on tools+system and on the image block; stable tool ordering; nothing volatile in the prefix; re-snapshot only after the canvas changes. Verify with `usage.cache_read_input_tokens` — if it's 0 across turns, something is invalidating silently |
-| **R7** | **Agent over-verifies and expands scope.** Opus 5 self-verifies without being told, and can add steps the user didn't request — expensive when a step is a paid render | Med | Delete verification scaffolding from the system prompt rather than adding it; include the scope-discipline instruction; approval gate on `render` is the hard backstop. Sweep effort `medium`→`xhigh` |
+| **R7** | **Agent coordinate grounding is unverified.** This is the whole job — the agent's value is boxing *the right thing*. Claude Opus 5 documents a 1:1 pixel-coordinate guarantee; there is no equivalent published guarantee for Seed 2.0 Pro, and ModelArk's "visual grounding" claim is not a measurement | **High** | A scored probe exists (`scratchpad/seed-probe.mjs`): synthetic image, known ground-truth box, reports IoU and centre error. **Run it before demoing.** If grounding is poor the fallback is a provider swap, which touches only the route's wire format. Note the failure mode reads as *Seedream* being imprecise, not as an agent bug |
+| **R7b** | Agent expands scope or over-narrates | Med | Scope-discipline and brevity instructions are in the system prompt; the approval gate on `render` is the hard backstop against expensive over-reach |
 | **R8** | localStorage quota (~5MB, already shared) | Med | URLs only; RDP stroke simplification; caps of 20 annotations/ref and 50 versions; visible quota banner. IndexedDB deferred — `getSnapshot` must be synchronous |
 | **R9** | `public/library-cache/` writes don't work on serverless | Med | Pre-existing, but Edit makes it *load-bearing* — the canvas cannot function on a tainted image |
 | **R10** | react-konva ↔ React 19.2 peer range | Med | Verify at install; `--legacy-peer-deps` is not acceptable. Fallback: `konva` has no React peer and can be driven imperatively — ~150 extra lines |
