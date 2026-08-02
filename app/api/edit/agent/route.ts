@@ -30,13 +30,27 @@ import {
   type ChatMessage,
 } from "@/lib/byteplus";
 import { toOpenAIToolDefs } from "@/lib/edit/agent-tools";
-import { logBytePlusError, logRouteError } from "@/lib/server-log";
+import {
+  logBytePlusError,
+  logRouteError,
+  logRouteOutcome,
+} from "@/lib/server-log";
 import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const MAX_TOKENS = 4096;
+/**
+ * Output ceiling for one turn.
+ *
+ * Raised from 4096: the tool schemas are long, and a model that narrates
+ * before calling a tool can spend the whole budget on prose and get truncated
+ * mid-tool-call. Upstream then returns `finish_reason: "length"` with a
+ * half-formed call, the client drops the turn, and the agent looks stuck
+ * having said nothing. Output tokens bill as used, so a higher ceiling costs
+ * nothing on the turns that do not need it.
+ */
+const MAX_TOKENS = 8192;
 
 const SYSTEM = `You drive an image editor for a designer. They describe a change in plain language; you make it happen by calling tools.
 
@@ -100,6 +114,17 @@ export async function POST(req: NextRequest) {
       },
       keys.byteplus,
     );
+
+    // Logged on the way out, not only on failure: a turn that returns 200
+    // with nothing usable is exactly the case that reads as "the agent is
+    // stuck", and it is invisible in the logs otherwise.
+    logRouteOutcome("edit.agent", startedAt, {
+      finish_reason: result.finishReason,
+      tool_calls: result.toolCalls?.length ?? 0,
+      has_content: Boolean(result.content?.trim()),
+      turn_messages: body.messages.length,
+      usage: result.usage,
+    });
 
     return NextResponse.json({
       content: result.content,

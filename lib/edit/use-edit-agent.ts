@@ -65,6 +65,11 @@ const VISION_LONG_EDGE = 2576;
 /** Stop runaway loops. Each iteration is a paid model call. */
 const MAX_TURNS = 12;
 
+/** Give up on one turn rather than showing "Thinking…" indefinitely. The
+ *  route allows 300s; a turn that has taken two minutes is not coming back
+ *  with anything useful. */
+const TURN_TIMEOUT_MS = 120_000;
+
 /**
  * How much to shrink an image so its long edge fits the vision tier.
  *
@@ -363,11 +368,27 @@ export function useEditAgent(
   const runLoop = React.useCallback(
     async (scale: number) => {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
-        const res = await fetch("/api/edit/agent", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: wireRef.current }),
-        });
+        let res: Response;
+        try {
+          res = await fetch("/api/edit/agent", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: wireRef.current }),
+            // A turn that never comes back leaves "Thinking…" on screen
+            // forever, which is indistinguishable from a hung app. The route
+            // itself allows 300s; this gives up first and says so.
+            signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+          });
+        } catch (e) {
+          const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+          push({
+            kind: "error",
+            text: timedOut
+              ? `The model did not answer within ${Math.round(TURN_TIMEOUT_MS / 1000)}s. Ask again, or make the request smaller.`
+              : `Could not reach the agent: ${e instanceof Error ? e.message : String(e)}`,
+          });
+          return;
+        }
         const data = (await res.json().catch(() => ({}))) as AgentTurn;
 
         if (res.status === 402) {
@@ -397,10 +418,41 @@ export function useEditAgent(
           push({ kind: "assistant", text: data.content.trim() });
         }
 
-        if (calls.length === 0 || data.finishReason !== "tool_calls") return;
+        // A turn with no tool calls is normally just the agent answering, and
+        // the assistant line above already said it. Every OTHER way of
+        // arriving here used to `return` in silence, leaving the panel exactly
+        // as it was — no reply, no error, nothing to act on. That is what
+        // "the agent is stuck" looks like from the outside, and it is worth
+        // more words than it costs.
+        if (calls.length === 0 || data.finishReason !== "tool_calls") {
+          if (calls.length > 0) {
+            push({
+              kind: "error",
+              text: `The model began ${calls.length} tool call${calls.length === 1 ? "" : "s"} but its turn ended early (${data.finishReason ?? "no reason given"}), so nothing was run. Try asking for one change at a time.`,
+            });
+          } else if (!data.content?.trim()) {
+            push({
+              kind: "error",
+              text:
+                data.finishReason === "length"
+                  ? "The model hit its output limit before saying anything. Ask for one change at a time."
+                  : `The model returned nothing to act on (${data.finishReason ?? "no finish reason"}). Say what you'd like changed and I'll try again.`,
+            });
+          }
+          return;
+        }
 
         const session = getEditSession(sessionId);
-        if (!session) return;
+        if (!session) {
+          // Silent before. The session is read fresh each turn, so a store
+          // that briefly cannot be read stopped the agent mid-conversation
+          // with no explanation at all.
+          push({
+            kind: "error",
+            text: "Lost track of this session while working. Reload the page and try again.",
+          });
+          return;
+        }
 
         const results: ChatMessage[] = [];
         /** Images a tool produced for the model to look at. */

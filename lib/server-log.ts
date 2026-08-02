@@ -59,6 +59,30 @@ function emit(record: Record<string, unknown>) {
 }
 
 /**
+ * Log a SUCCESSFUL turn, for the failures that are not errors.
+ *
+ * "The agent is stuck" leaves nothing in the logs today, because every path
+ * that produced it returned 200: a turn truncated at the token limit, a turn
+ * with no tool calls and no text, a model that answered something unusable.
+ * Without a line per turn there is no way to tell those apart after the fact,
+ * and the only evidence is a screenshot of a chat panel that did nothing.
+ *
+ * Never pass prompts, images, or keys — counts and reasons only.
+ */
+export function logRouteOutcome(
+  route: RouteTag,
+  startedAt: number,
+  meta: Record<string, unknown> = {},
+) {
+  emit({
+    event: "route_outcome",
+    route,
+    ms: Date.now() - startedAt,
+    ...meta,
+  });
+}
+
+/**
  * Log a BytePlus failure with enough structure to answer "how often and
  * why are renders failing?" from log search alone.
  *
