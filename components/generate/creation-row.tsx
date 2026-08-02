@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { Asset } from "@/lib/library/assets";
 import { removeAsset, updateAsset } from "@/lib/library/assets";
+import { startEditSessionFromUrl } from "@/lib/edit/start-session";
 import type { CreationEntry } from "@/lib/library/feed";
 import { AssetMedia } from "@/components/library/asset-media";
 import { BrandLogo, resolveModelBrand } from "@/components/ui/brand-logo";
@@ -46,6 +47,39 @@ function AssetRow({ asset }: { asset: Asset }) {
   const router = useRouter();
   const [busyPin, setBusyPin] = React.useState(false);
   const [busyDelete, setBusyDelete] = React.useState(false);
+  const [busyEdit, setBusyEdit] = React.useState(false);
+
+  /**
+   * Create an edit session seeded with this asset, then soft-navigate to it.
+   *
+   * Async because the session needs the image's intrinsic dimensions before
+   * it exists — coordinate normalization and output sizing both derive from
+   * them, so a ref without them is only half usable.
+   *
+   * Prefers the local mirror when there is one: it's same-origin, which is
+   * what the canvas needs once compositing lands, and it doesn't expire the
+   * way a signed CDN URL does.
+   */
+  async function onEdit(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busyEdit) return;
+    setBusyEdit(true);
+    try {
+      const session = await startEditSessionFromUrl({
+        url: asset.mirrorUrl ?? asset.url,
+        assetId: asset.id,
+        name: asset.title,
+      });
+      // Soft-nav, unlike onReusePrompt's hard navigation — /edit/[id] reads
+      // its state from the store, not from query params, so there's nothing
+      // for a full page load to hydrate.
+      router.push(`/edit/${session.id}`);
+    } catch {
+      // Measuring failed (expired signed URL, blocked host). Re-enable so
+      // the user can retry rather than being left with a dead control.
+      setBusyEdit(false);
+    }
+  }
 
   function onTogglePin(e: React.MouseEvent) {
     e.stopPropagation();
@@ -228,22 +262,19 @@ function AssetRow({ asset }: { asset: Asset }) {
             </IconButton>
           </div>
 
-          {/* Bottom-right action pills — Edit (placeholder) + Create
-              Video. Image kind only: Edit will eventually open an
-              inline edit drawer (placeholder for now); Create Video
+          {/* Bottom-right action pills — Edit + Create Video. Image kind
+              only: Edit opens this asset in the /edit canvas; Create Video
               hard-navigates to the Video tab with this image seeded
               into the i2v starting-frame slot. Sits on a separate row
               from the brand badge so they don't visually compete. */}
           {asset.kind === "image" && (
             <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-bg/85 p-1 opacity-0 transition-opacity backdrop-blur-sm group-hover:opacity-100 focus-within:opacity-100">
               <IconButton
-                label="Edit (coming soon)"
+                label={busyEdit ? "Opening editor…" : "Edit"}
+                disabled={busyEdit}
                 onClick={(e) => {
-                  e.stopPropagation();
-                  // Placeholder — surface stays disabled-looking via
-                  // disabled prop until the editor lands.
+                  void onEdit(e);
                 }}
-                disabled
               >
                 <Pencil className="size-3.5" />
               </IconButton>
