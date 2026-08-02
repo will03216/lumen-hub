@@ -38,6 +38,17 @@ services:
       NEXT_PUBLIC_CLERK_AFTER_SIGN_OUT_URL: /sign-in
       KEY_ENCRYPTION_SECRET: ${KEY_ENCRYPTION_SECRET}
       BYTEPLUS_API_KEY: ${BYTEPLUS_API_KEY:-}
+      # Which Seed model writes prompts and shot breakdowns. Unset falls back
+      # to seed-2-0-lite; set BYTEPLUS_PROMPT_MODEL=seed-2-0-pro-260228 for Pro.
+      # These were previously not forwarded at all, so setting them in .env had
+      # no effect inside the container.
+      BYTEPLUS_PROMPT_MODEL: ${BYTEPLUS_PROMPT_MODEL:-}
+      BYTEPLUS_CAPTION_MODEL: ${BYTEPLUS_CAPTION_MODEL:-}
+      # "responses" | "chat" — overrides the per-model default. Pro is served
+      # by /responses, Lite by /chat/completions.
+      BYTEPLUS_PROMPT_API: ${BYTEPLUS_PROMPT_API:-}
+      BYTEPLUS_CAPTION_API: ${BYTEPLUS_CAPTION_API:-}
+      BYTEPLUS_MODEL_ALIASES: ${BYTEPLUS_MODEL_ALIASES:-}
       MODELARK_AK: ${MODELARK_AK:-}
       MODELARK_SK: ${MODELARK_SK:-}
       MODELARK_TOS_BUCKET: ${MODELARK_TOS_BUCKET:-}

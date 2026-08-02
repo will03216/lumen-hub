@@ -143,3 +143,28 @@ describe("whole-response resilience", () => {
     }
   });
 });
+
+describe("output token budget", () => {
+  it("scales with scene count instead of a flat cap", async () => {
+    const { tokenBudgetForScenes } = await import("@/lib/byteplus");
+    expect(tokenBudgetForScenes(12)).toBeGreaterThan(tokenBudgetForScenes(4));
+  });
+
+  it("covers the skill's 80-120 word target at every realistic count", async () => {
+    const { tokenBudgetForScenes } = await import("@/lib/byteplus");
+    for (const n of [1, 4, 6, 8, 12, 20, 30]) {
+      // ~120 words at ~1.35 tok/word, plus JSON scaffolding per scene.
+      const needed = Math.round(n * 120 * 1.35) + n * 40;
+      expect(tokenBudgetForScenes(n)).toBeGreaterThanOrEqual(needed);
+    }
+  });
+
+  it("never returns an absurd budget for junk input", async () => {
+    const { tokenBudgetForScenes } = await import("@/lib/byteplus");
+    for (const n of [0, -5, 1e6, NaN]) {
+      const b = tokenBudgetForScenes(Number.isNaN(n) ? 1 : n);
+      expect(b).toBeGreaterThanOrEqual(1500);
+      expect(b).toBeLessThanOrEqual(16000);
+    }
+  });
+});

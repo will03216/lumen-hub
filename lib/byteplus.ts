@@ -330,21 +330,127 @@ export type ScenePromptOutput = {
   prompt: string;
 };
 
-const SCENE_PROMPT_SYSTEM = `You are a professional film director writing prompts for an AI video generation model (Seedance).
+const SCENE_PROMPT_SYSTEM = `You are a professional film director writing prompts for Seedance.
 
-Given a story and its scene breakdown, rewrite each scene's script into a tight, cinematic video-generation prompt.
+Given a story and its scene breakdown, rewrite each scene's script into a layered, cinematic video-generation prompt.
 
-Rules:
-- Each prompt must be 20–45 words — specific enough to direct the shot, short enough for the model.
-- Lead with the key visual action or subject. Follow with camera angle, lighting, and mood.
+Rules — follow the Seedance reference documents above:
+- Use the 6-component order: Subject → Action → Environment → Camera → Lighting → Style, with constraints last.
+- Target 80–120 words per prompt. This is a LAYERED prompt, not a caption: a one-line summary is a failure. Never write fewer than 60 words.
+- Name concrete, filmable detail — lens and focal length, film stock or sensor look, time of day, practical light sources, texture, wardrobe fabric and colour. Replace every vague mood word ("epic", "beautiful", "stunning") with something the camera can actually see.
+- Carry the SAME subject description, wardrobe, palette and lighting wording across every scene, verbatim, so the sequence stays continuous.
 - Do NOT include dialogue, sound effects, or audio descriptions.
-- Preserve the story's tone across all scenes for visual consistency.
 - Output ONLY valid JSON — no markdown fences, no commentary:
   {"scenes":[{"index":0,"prompt":"..."},{"index":1,"prompt":"..."}]}`;
 
 /** The default system prompt, exported so callers can ground it in the
  *  bundled Seedance skill's reference docs before passing it back in. */
 export { SCENE_PROMPT_SYSTEM };
+
+/**
+ * Output budget for a JSON shot list.
+ *
+ * The skill targets 80–120 words per shot; at ~1.35 tokens/word plus JSON
+ * scaffolding that is ~200 tokens each. Under-budgeting truncates the response
+ * mid-object, which fails as a JSON parse error rather than as "too short" —
+ * so the cause is genuinely hard to see from the symptom.
+ */
+/**
+ * Ceiling on images sent to the prompt model.
+ *
+ * Each one costs vision tokens on every breakdown, and past a handful the
+ * model stops attending to the tail anyway. The reference set that matters —
+ * lead character, location, key prop, a style plate — fits comfortably.
+ */
+export const MAX_VISION_IMAGES = 6;
+
+export function tokenBudgetForScenes(sceneCount: number): number {
+  const n = Math.max(1, Math.min(40, Math.round(sceneCount)));
+  return Math.min(16000, Math.max(1500, n * 220 + 400));
+}
+
+/**
+ * One text completion, over whichever API the configured model wants.
+ *
+ * Seed 2.0 Pro is served by /responses, Lite by /chat/completions
+ * (`shouldUseResponsesApi`). Routing on the model means switching
+ * BYTEPLUS_PROMPT_MODEL to Pro just works instead of silently hitting the
+ * wrong endpoint. BYTEPLUS_PROMPT_API forces one or the other.
+ */
+async function completeText(p: {
+  system: string;
+  user: string;
+  maxTokens: number;
+  temperature: number;
+  apiKey?: string;
+  /**
+   * Images for the model to LOOK at, as https URLs or data URIs. Seed 2.0 is
+   * vision-capable, so handing it the actual character and location lets it
+   * describe what is really there instead of inventing a stand-in — which is
+   * the whole point of a reference.
+   */
+  images?: string[];
+}): Promise<string> {
+  const model = PROMPT_MODEL;
+  const images = (p.images ?? []).filter((u) => u?.trim()).slice(0, MAX_VISION_IMAGES);
+
+  if (shouldUseResponsesApi(model, process.env.BYTEPLUS_PROMPT_API)) {
+    const body = buildResponsesBody({
+      model,
+      instruction: p.system,
+      content: [
+        // Images first: the model should have seen them before it reads the
+        // instruction that refers to them.
+        ...images.map((url) => ({ type: "input_image" as const, image_url: url })),
+        { type: "input_text", text: p.user },
+      ],
+      maxTokens: p.maxTokens,
+      temperature: p.temperature,
+    });
+    const out = await request<unknown>(
+      "/responses",
+      { method: "POST", body: JSON.stringify(body) },
+      p.apiKey,
+    );
+    const text = extractResponsesText(out)?.trim();
+    if (!text) throw new BytePlusError(502, "Bad Gateway", "no content in responses output");
+    return text;
+  }
+
+  const out = await request<{ choices?: Array<{ message?: { content?: string } }> }>(
+    "/chat/completions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: resolveModel(model),
+        messages: [
+          { role: "system", content: p.system },
+          {
+            role: "user",
+            // A plain string when there are no images keeps the request shape
+            // identical to before for text-only callers.
+            content:
+              images.length > 0
+                ? [
+                    ...images.map((url) => ({
+                      type: "image_url" as const,
+                      image_url: { url },
+                    })),
+                    { type: "text" as const, text: p.user },
+                  ]
+                : p.user,
+          },
+        ],
+        max_tokens: p.maxTokens,
+        temperature: p.temperature,
+      }),
+    },
+    p.apiKey,
+  );
+  const text = out.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new BytePlusError(502, "Bad Gateway", "no content in response");
+  return text;
+}
 
 // ---------- Story breakdown (one call: cut + write) ----------
 //
@@ -376,22 +482,42 @@ export type StoryBreakdownInput = {
    * breaks outrank any inference we could make.
    */
   authoredScenes?: { heading: string; characters: string[]; body: string }[];
+  /**
+   * Reference images for the model to actually look at — character, location,
+   * prop, style plate. Seed 2.0 is vision-capable, so these let it describe
+   * the real subject rather than inventing one, which is what keeps the
+   * written prompts consistent with the images used at render time.
+   */
+  images?: { url: string; label?: string }[];
 };
 
-const BREAKDOWN_SYSTEM = `You are a director and storyboard artist breaking a story into shots for an AI video generation model (Seedance).
+const BREAKDOWN_SYSTEM = `You are a director and storyboard artist breaking a story into shots for Seedance.
 
-Decide the shot list yourself. Do not simply cut on paragraph breaks — cut where the beat changes: a new action, a new location, a reaction, a reveal, a shift in time.
+Decide the shot list yourself. Do not cut on paragraph breaks — cut where the beat changes: a new action, a new location, a reaction, a reveal, a shift in time.
 
-Rules:
+Shot list:
 - Each shot runs 5–15 seconds. Choose the length from what has to happen on screen, not evenly.
 - The sum of all durations should land near the requested total. Prefer fewer, longer shots over many tiny ones.
-- Write each "prompt" as a complete, self-contained Seedance prompt of 20–45 words. Lead with the subject and action, then camera, then light and mood.
-- Carry the same subject description, wardrobe, palette and lighting across every shot so the sequence looks continuous.
-- Do NOT put dialogue, sound effects, or audio description in "prompt".
+
+Writing each "prompt" — follow the Seedance reference documents above:
+- Use the 6-component order: Subject → Action → Environment → Camera → Lighting → Style, with constraints last.
+- Target 80–120 words per shot. This is a LAYERED prompt, not a caption: a one-line summary is a failure. Never write fewer than 60 words.
+- Name concrete, filmable detail — lens and focal length, film stock or sensor look, time of day, practical light sources, texture, wardrobe fabric and colour. Replace every vague mood word ("epic", "beautiful", "stunning") with something the camera can actually see.
+- Carry the SAME subject description, wardrobe, palette and lighting wording across every shot, verbatim. Repeating it is what holds the sequence together; varying it is what breaks continuity.
+- No dialogue, sound effects, or audio description in "prompt".
+
+When reference images are attached:
+- Look at them. Describe what you actually see — face, build, hair, wardrobe fabric and colour, the real architecture and materials of the location, the specific prop.
+- Reuse that same physical description, word for word, in every shot the subject appears in. This is what keeps the character recognisable from shot to shot.
+- Never contradict a reference. If the image shows a red wool coat, do not write "leather jacket".
+- Do not describe the photograph itself ("a portrait of…"); describe the subject as it should appear in the film.
+
+Other fields:
 - "heading" is a 2–6 word label for the shot list, e.g. "Riverside bench, golden hour".
 - "characters" lists who is visible in the shot; omit it when nobody is.
-- Output ONLY valid JSON — no markdown fences, no commentary:
-  {"scenes":[{"index":0,"duration":8,"prompt":"...","heading":"...","characters":["..."]}]}`;
+
+Output ONLY valid JSON — no markdown fences, no commentary:
+{"scenes":[{"index":0,"duration":8,"prompt":"...","heading":"...","characters":["..."]}]}`;
 
 export { BREAKDOWN_SYSTEM };
 
@@ -419,26 +545,34 @@ export async function breakdownStory(
         .join("\n\n")
     : "";
 
+  // Name the attached images in the order they were sent, so "Image 1" in the
+  // model's view has a role. Unlabelled images are much weaker guidance.
+  const imageManifest = p.images?.length
+    ? `\n\nATTACHED REFERENCE IMAGES (in order):\n` +
+      p.images
+        .slice(0, MAX_VISION_IMAGES)
+        .map((img, i) => `Image ${i + 1}: ${img.label ?? "Reference"}`)
+        .join("\n") +
+      `\nLook at these and describe what you actually see. Reuse the same physical description in every shot the subject appears in.`
+    : "";
+
   const userMessage =
-    `TOTAL RUNTIME: ${target}s (aim for roughly ${suggested} shot${suggested === 1 ? "" : "s"}, but use however many the story needs)\n\n` +
-    `STORY:\n${p.story.trim()}${authored}`;
+    `TOTAL RUNTIME: ${target}s (aim for roughly ${suggested} shot${suggested === 1 ? "" : "s"}, but use however many the story needs)` +
+    imageManifest +
+    `\n\nSTORY:\n${p.story.trim()}${authored}`;
 
-  const body = {
-    model: resolveModel(PROMPT_MODEL),
-    messages: [
-      { role: "system", content: systemPrompt?.trim() || BREAKDOWN_SYSTEM },
-      { role: "user", content: userMessage },
-    ],
-    max_tokens: 4000,
+  const raw = await completeText({
+    system: systemPrompt?.trim() || BREAKDOWN_SYSTEM,
+    user: userMessage,
+    // Budget by shot count, not a flat number. At the skill's 80–120 word
+    // target a shot costs ~200 tokens with JSON overhead, so the old flat
+    // 4000 quietly truncated long stories — and a truncated response is
+    // invalid JSON, which surfaces as a parse error rather than "too short".
+    maxTokens: tokenBudgetForScenes(p.authoredScenes?.length ?? suggested),
     temperature: 0.6,
-  };
-
-  const out = await request<{
-    choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
-
-  const raw = out.choices?.[0]?.message?.content?.trim();
-  if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
+    apiKey,
+    images: p.images?.map((i) => i.url),
+  });
 
   const json = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   let parsed: { scenes?: unknown };
@@ -505,22 +639,15 @@ export async function generateScenePrompts(
     .map((s) => `[${s.index}] (${s.duration}s) ${s.script.trim() || "(no script yet)"}`)
     .join("\n")}`;
 
-  const body = {
-    model: resolveModel(PROMPT_MODEL),
-    messages: [
-      { role: "system", content: systemPrompt?.trim() || SCENE_PROMPT_SYSTEM },
-      { role: "user", content: userMessage },
-    ],
-    max_tokens: 1200,
+  const raw = await completeText({
+    system: systemPrompt?.trim() || SCENE_PROMPT_SYSTEM,
+    user: userMessage,
+    // Scales with scene count — a flat 1200 truncated from ~6 scenes up once
+    // prompts grew to the skill's 80–120 word target.
+    maxTokens: tokenBudgetForScenes(scenes.length),
     temperature: 0.7,
-  };
-
-  const out = await request<{
-    choices?: Array<{ message?: { content?: string } }>;
-  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
-
-  const raw = out.choices?.[0]?.message?.content?.trim();
-  if (!raw) throw new BytePlusError(502, "Bad Gateway", "no content in response");
+    apiKey,
+  });
 
   // Strip markdown fences the model sometimes adds despite instructions.
   const json = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
