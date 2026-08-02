@@ -107,15 +107,16 @@ export type OpenAIToolDef = {
 };
 
 /**
- * Tools that are defined but not yet backed by an implementation.
+ * Tools defined but not yet backed by an implementation.
  *
- * They stay in EDIT_AGENT_TOOLS — the schema, the planner branch and the
- * tests are all real and will be needed — but they are withheld from what the
- * model is shown. Advertising a tool that answers "not available in this
- * build" spends tokens on every turn describing it, and when the model
- * reasonably picks it the user gets a dead end instead of an edit.
+ * They stay in EDIT_AGENT_TOOLS — schema, planner branch and tests are all
+ * real — but are withheld from what the model is shown. Advertising a tool
+ * that answers "not available in this build" spends tokens describing it on
+ * every turn, and hands the user a dead end when the model reasonably picks
+ * it. Empty now that layer separation has landed; kept as the seam for the
+ * next capability that lands backend-first.
  */
-const UNAVAILABLE: ReadonlySet<string> = new Set(["separate_layers"]);
+const UNAVAILABLE: ReadonlySet<string> = new Set();
 
 export function toOpenAIToolDefs(
   tools: readonly AgentToolDef[] = EDIT_AGENT_TOOLS.filter(

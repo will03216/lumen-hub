@@ -119,6 +119,37 @@ const MIN_BOX_SPAN = 4;
 const DEFAULT_MAX_WORDS = 600;
 const DEFAULT_MAX_TARGETS = 20;
 
+/**
+ * How to use each non-base reference.
+ *
+ * Emitted only when there is something to disambiguate — a lone base image
+ * needs no explanation, and saying "reference image 1 is the image being
+ * edited" to a single-image request is noise the model has to read past.
+ *
+ * The base image is named explicitly in each line so the model has an anchor
+ * for perspective and lighting rather than averaging across the set.
+ */
+function roleBlock(refs: readonly CompileRef[]): string | null {
+  const base = refs.find((r) => r.role === "base");
+  const others = refs.filter((r) => r.role !== "base");
+  if (others.length === 0) return null;
+
+  const anchor = base ? `reference image ${base.index}` : "the first reference";
+  const lines = others.map((r) => {
+    switch (r.role) {
+      case "subject":
+        return `Reference image ${r.index} is a subject reference: composite the object it shows into the scene, matching the perspective, lighting, shadow and scale of ${anchor}.`;
+      case "style":
+        return `Reference image ${r.index} is a style reference: borrow its palette, texture and lighting treatment only. Do not copy its content or composition.`;
+      case "sketch":
+        return `Reference image ${r.index} is a rough sketch: treat it as a layout guide for placement and proportion, and render finished, realistic detail rather than reproducing the drawn lines.`;
+      default:
+        return `Reference image ${r.index} is supporting context for ${anchor}.`;
+    }
+  });
+  return lines.join("\n");
+}
+
 export function compileAnnotationPrompt(input: CompileInput): CompileResult {
   const maxWords = input.maxWords ?? DEFAULT_MAX_WORDS;
   const maxTargets = input.maxTargetsPerRef ?? DEFAULT_MAX_TARGETS;
@@ -139,6 +170,15 @@ export function compileAnnotationPrompt(input: CompileInput): CompileResult {
       `Instruction is ${words} words, over the ${maxWords}-word cap; the model may ignore later sentences.`,
     );
   }
+
+  // Role prose, once, before the per-reference target blocks.
+  //
+  // Seedream receives several images in one array with no inherent labelling,
+  // so without this the model has to guess which is the subject being edited
+  // and which is a style hint — and it guesses wrong often enough to turn a
+  // fusion into a collage. This is what makes §5C more than a file picker.
+  const roles = roleBlock(input.refs);
+  if (roles) blocks.push(roles);
 
   for (const ref of input.refs) {
     const visible = [...ref.annotations]

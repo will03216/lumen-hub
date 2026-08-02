@@ -30,6 +30,7 @@ import {
 } from "@/lib/edit/sessions";
 import { buildAnnotation, type DraftAnnotation } from "@/lib/edit/annotations";
 import { useEditSession } from "@/lib/edit/use-edit-session";
+import { useLayerSeparation } from "@/lib/edit/use-layer-separation";
 import { buildEditRequest, useEditRender } from "@/lib/edit/use-edit-render";
 import {
   MARKER_COLOR,
@@ -45,6 +46,12 @@ import { ToolRail } from "./tool-rail";
 import { AnnotationPanel } from "./annotation-panel";
 import { AgentPanel } from "./agent-panel";
 import { ResultView } from "./result-view";
+import { ReferencesPanel } from "./references-panel";
+import { LayersPanel } from "./layers-panel";
+import { PresetStrip } from "./preset-strip";
+
+/** Kill switch for §5B. Set NEXT_PUBLIC_EDIT_LAYERS=0 to hide the panel. */
+const LAYERS_ENABLED = process.env.NEXT_PUBLIC_EDIT_LAYERS !== "0";
 
 const ASPECTS = [
   { id: "source", label: "Source" },
@@ -57,6 +64,7 @@ const ASPECTS = [
 export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const session = useEditSession(sessionId);
   const { state, render, cancel } = useEditRender(sessionId);
+  const layers = useLayerSeparation(sessionId);
 
   // useSyncExternalStore returns null on the server and on the first client
   // render, which is indistinguishable from "no such session". Waiting for
@@ -300,7 +308,11 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         <aside className="space-y-6">
           {/* The agent drives the same tools the rail does, so its marks show
               up in the panel below and can be corrected by hand. */}
-          <AgentPanel sessionId={sessionId} onRender={render} />
+          <AgentPanel
+            sessionId={sessionId}
+            onRender={render}
+            onSeparateLayers={LAYERS_ENABLED ? layers.separate : undefined}
+          />
 
           <div className="space-y-2">
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
@@ -317,6 +329,25 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
               }}
             />
           </div>
+
+          {/* §5C — fusion and sketch. Roles here become prose telling the
+              model how to use each image; without them it has to guess which
+              of several images is the subject. */}
+          <ReferencesPanel sessionId={sessionId} refs={session.refs} />
+
+          {/* §5B — behind a kill switch rather than an opt-in. The upstream
+              API is preview-flagged and may not be enabled on a given
+              BytePlus account, but that case already reports itself clearly,
+              so defaulting to visible costs nothing and hiding it would mean
+              a rebuild to try the feature at all. */}
+          {LAYERS_ENABLED && (
+            <LayersPanel
+              reference={activeRef}
+              state={layers.state}
+              onSeparate={layers.separate}
+              onToggle={layers.toggle}
+            />
+          )}
 
           <div className="space-y-2">
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
@@ -348,6 +379,21 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
 
       {/* Prompt bar */}
       <div className="mt-6 space-y-3 rounded-[14px] border border-border bg-panel p-4">
+        {/* §5D — presets sit directly above the instruction box because that
+            is what they write into. §4's competitive read was that presets
+            ARE the demo: an empty canvas is where a demo dies in the first
+            thirty seconds. */}
+        <PresetStrip
+          hasMark={annotations.length > 0}
+          onApply={(instruction) => {
+            // Straight through the buffered field so the textarea updates
+            // immediately, then flushed so Render doesn't read stale text
+            // if it is clicked inside the debounce window.
+            instructionField.onChange(instruction);
+            instructionField.flush();
+          }}
+        />
+
         <textarea
           value={instructionField.value}
           onChange={(e) => instructionField.onChange(e.target.value)}

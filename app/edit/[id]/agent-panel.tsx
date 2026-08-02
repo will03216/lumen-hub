@@ -26,12 +26,14 @@ import { cn } from "@/lib/utils";
 export function AgentPanel({
   sessionId,
   onRender,
+  onSeparateLayers,
 }: {
   sessionId: string;
   onRender: () => Promise<void>;
+  onSeparateLayers?: (maxLayers: number) => Promise<void>;
 }) {
   const { entries, send, busy, pending, resolveApproval, needsKey } =
-    useEditAgent(sessionId, { onRender });
+    useEditAgent(sessionId, { onRender, onSeparateLayers });
   const [draft, setDraft] = React.useState("");
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -112,7 +114,7 @@ export function AgentPanel({
           href="/settings"
           className="rounded-[8px] border border-border px-3 py-2 text-center text-[12px] text-ink-dim hover:border-border-strong hover:text-ink"
         >
-          Add an Anthropic API key in Settings →
+          Add your BytePlus API key in Settings →
         </Link>
       ) : (
         <form onSubmit={submit} className="flex gap-2">

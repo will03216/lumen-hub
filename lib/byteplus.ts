@@ -127,9 +127,43 @@ export type ImageGenParams = {
   max_images?: number; // sequential_image_generation_options.max_images (1–15)
 };
 
+/**
+ * Fields the layer-separation preview adds to each `data[]` entry. Preview-
+ * flagged and non-final upstream — every field optional.
+ *
+ * Deliberately additive: widening `ImageGenDatum` with optional properties is
+ * source-compatible, so `use-image-render.ts`, `image-generator.tsx` and
+ * `image-gen-node.tsx` compile untouched. Nothing here is trustworthy enough
+ * to destructure directly — route code goes through
+ * `lib/edit/layers-normalize.ts`, which is where all the shape tolerance
+ * lives (PRD §10 R1).
+ */
+export type ImageGenLayerFields = {
+  /** Stacking order. 0 is the background plate; 1..16 composite over it. */
+  z_index?: number;
+  /** Absolute is source pixels; normalized is the 0–1000 integer space the
+   *  annotation tags already use. Upstream may send either, both, or a bare
+   *  4-array — see the normalizer. */
+  bounding_box?: {
+    absolute?: [number, number, number, number];
+    normalized?: [number, number, number, number];
+  };
+  /** Model-generated short label, e.g. "left hand". Absent on the background. */
+  name?: string;
+  description?: string;
+};
+
+/** One entry in an image-generation response. Layer fields are only populated
+ *  by `separateLayers`; a normal generation leaves them undefined. */
+export type ImageGenDatum = {
+  url?: string;
+  b64_json?: string;
+  size?: string;
+} & ImageGenLayerFields;
+
 export type ImageGenResponse = {
   created: number;
-  data: Array<{ url?: string; b64_json?: string; size?: string }>;
+  data: Array<ImageGenDatum>;
   usage?: Record<string, unknown>;
 };
 
@@ -152,6 +186,86 @@ export async function generateImage(params: ImageGenParams, apiKey?: string) {
       };
     }
   }
+  return request<ImageGenResponse>("/images/generations", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }, apiKey);
+}
+
+/**
+ * Layer separation — same endpoint, same auth, same error type as
+ * `generateImage`. The ONLY thing that differs is the prompt, so this is a
+ * thin wrapper rather than a second `request()` path: a fork would duplicate
+ * `resolveModel`, the Bearer plumbing and `BytePlusError` construction, and
+ * those three are exactly what we never want two copies of.
+ *
+ * The response comes back as an ordinary `ImageGenResponse` whose `data[]`
+ * entries carry the extra `ImageGenLayerFields`. That shape is preview-
+ * flagged and documented as non-final upstream, so callers must NOT read
+ * those fields directly — run the response through `normalizeLayerResponse`.
+ *
+ * Model: defaults to `IMAGE_MODEL` like every other call here, but layer
+ * separation is a Seedream 5.0 Pro preview feature — callers should pass the
+ * Pro id explicitly. On a key without preview access this surfaces as a plain
+ * BytePlusError with the upstream status, which the route forwards 1:1.
+ */
+export type LayerGenParams = {
+  /** Exactly one image. Layer separation is single-reference — an array is a
+   *  caller bug and the route rejects it before we get here. */
+  image: string;
+  model?: string;
+  size?: string;
+  seed?: number;
+  /** `auto` splits the whole frame; `region` isolates whatever the caller has
+   *  already marked with a red box in the composited input. */
+  mode?: "auto" | "region";
+  /** Only meaningful in `auto` mode. Clamped to the documented 1..16. */
+  maxLayers?: number;
+  /** Escape hatch: overrides both templates verbatim. Exists so a prompt fix
+   *  doesn't need a deploy of this file when the preview spec moves. */
+  instruction?: string;
+};
+
+/** Documented ceiling: 1 background plate + at most 16 layers. */
+const MAX_SEPARATED_LAYERS = 16;
+/** What we ask for when the caller doesn't say. Matches the PRD's worked
+ *  example and keeps a default request cheap. */
+const DEFAULT_SEPARATED_LAYERS = 10;
+
+function layerPrompt(p: LayerGenParams): string {
+  const explicit = p.instruction?.trim();
+  if (explicit) return explicit;
+  if (p.mode === "region") return "Separate the element inside the red box.";
+  const raw = p.maxLayers ?? DEFAULT_SEPARATED_LAYERS;
+  // Clamp rather than reject: this is a prompt, not a validated parameter, and
+  // "up to 0 layers" or "up to 1e9 layers" is a worse ask than a sane number.
+  const n = Math.min(
+    MAX_SEPARATED_LAYERS,
+    Math.max(1, Math.round(Number.isFinite(raw) ? raw : DEFAULT_SEPARATED_LAYERS)),
+  );
+  return `Please split the reference image into up to ${n} layers.`;
+}
+
+export async function separateLayers(
+  p: LayerGenParams,
+  apiKey?: string,
+): Promise<ImageGenResponse> {
+  const body: Record<string, unknown> = {
+    model: resolveModel(p.model ?? IMAGE_MODEL),
+    response_format: "url",
+    watermark: false,
+    image: p.image,
+    prompt: layerPrompt(p),
+  };
+  // Unlike generateImage we do NOT default a size. Layer PNGs are only useful
+  // if they line up with the source, so an unrequested "2048x2048" would be
+  // actively wrong; omitting lets the model track the input.
+  if (p.size) body.size = p.size;
+  if (p.seed !== undefined) body.seed = p.seed;
+  // No `sequential_image_generation` here even though this returns many
+  // images: the preview docs describe the multi-entry response as intrinsic to
+  // the split, and max_images caps at 15 — below the 17 entries this can
+  // return. If upstream later requires the flag it goes here.
   return request<ImageGenResponse>("/images/generations", {
     method: "POST",
     body: JSON.stringify(body),

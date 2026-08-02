@@ -135,8 +135,8 @@ describe("golden string", () => {
           brush(),
           arrow(),
         ]),
-        // A second ref with nothing on it must contribute nothing at all —
-        // not a header, not a blank line.
+        // A second ref with no annotations contributes no target block —
+        // not a header, not a blank line — but does get a role line.
         ref([], { index: 2, refId: "ref-2", role: "subject", width: 1000, height: 1000 }),
       ],
     });
@@ -144,6 +144,11 @@ describe("golden string", () => {
     expect(result.prompt).toBe(
       [
         "Remove the paper ball. Replace the tabletop with dark walnut.",
+        "",
+        // Ref 2 carries no annotations, so it contributes no target block —
+        // but it IS in the wire array, and the model has no other way to know
+        // what it is for. The role line is the only thing that says so.
+        "Reference image 2 is a subject reference: composite the object it shows into the scene, matching the perspective, lighting, shadow and scale of reference image 1.",
         "",
         "Reference image 1 target notes: Mark 01 (point 1) — remove the logo on the sleeve; Region 02 (box 1) — replace the surface with brushed steel.",
         "",
@@ -793,5 +798,52 @@ describe("purity", () => {
   it("returns an empty prompt for no instruction and no refs", () => {
     const result = compileAnnotationPrompt({ instruction: "", refs: [] });
     expect(result).toEqual({ prompt: "", plans: [], warnings: [] });
+  });
+});
+
+describe("reference roles (§5C)", () => {
+  it("says nothing when there is only a base image", () => {
+    // A single-image edit has nothing to disambiguate. Explaining that
+    // reference 1 is the image being edited is noise the model reads past.
+    const r = compileAnnotationPrompt({
+      instruction: "make it walnut",
+      refs: [ref([])],
+    });
+    expect(r.prompt).toBe("make it walnut");
+  });
+
+  it("describes each non-base role and anchors it to the base image", () => {
+    const r = compileAnnotationPrompt({
+      instruction: "put the bottle on the marble",
+      refs: [
+        ref([]),
+        ref([], { index: 2, refId: "b", role: "subject", width: 100, height: 100 }),
+        ref([], { index: 3, refId: "c", role: "style", width: 100, height: 100 }),
+        ref([], { index: 4, refId: "d", role: "sketch", width: 100, height: 100 }),
+      ],
+    });
+    expect(r.prompt).toContain("Reference image 2 is a subject reference");
+    expect(r.prompt).toContain("Reference image 3 is a style reference");
+    expect(r.prompt).toContain("Reference image 4 is a rough sketch");
+    // Anchored, so the model matches lighting to one image rather than
+    // averaging across the set.
+    expect(r.prompt).toContain("of reference image 1");
+    // A style reference must not have its content copied — that is the
+    // difference between borrowing a look and pasting a second picture in.
+    expect(r.prompt).toContain("Do not copy its content");
+  });
+
+  it("keeps the verified target format untouched alongside roles", () => {
+    const r = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([point({ x: 500, y: 500 })]),
+        ref([], { index: 2, refId: "b", role: "style", width: 100, height: 100 }),
+      ],
+    });
+    expect(r.prompt).toContain(
+      "Apply the requested edit specifically to these marked targets. Preserve unmarked regions unless the instruction explicitly says otherwise.",
+    );
+    expect(r.prompt).toContain("<point>[[250,500]]</point>");
   });
 });

@@ -142,7 +142,12 @@ type AgentTurn = {
 
 export function useEditAgent(
   sessionId: string,
-  opts: { onRender: () => Promise<void> },
+  opts: {
+    onRender: () => Promise<void>;
+    /** Undefined when §5B is switched off — the tool then reports that
+     *  honestly rather than appearing to work. */
+    onSeparateLayers?: (maxLayers: number) => Promise<void>;
+  },
 ) {
   const [entries, setEntries] = React.useState<ChatEntry[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -156,6 +161,8 @@ export function useEditAgent(
   const approvalRef = React.useRef<((ok: boolean) => void) | null>(null);
   const onRenderRef = React.useRef(opts.onRender);
   onRenderRef.current = opts.onRender;
+  const onSeparateRef = React.useRef(opts.onSeparateLayers);
+  onSeparateRef.current = opts.onSeparateLayers;
 
   const push = React.useCallback((e: ChatEntryInput) => {
     setEntries((prev) => [...prev, { ...e, id: newEditId() }]);
@@ -284,8 +291,20 @@ export function useEditAgent(
           }
         }
 
-        case "separate_layers":
-          return { text: "Layer separation isn't available yet in this build." };
+        case "separate_layers": {
+          const run = onSeparateRef.current;
+          if (!run) {
+            return {
+              text: "Layer separation is switched off in this build. Tell the user rather than retrying.",
+            };
+          }
+          await run(plan.maxLayers ?? 10);
+          // The panel owns the result; the agent gets told it happened so it
+          // can talk about it, not a payload it would only have to summarise.
+          return {
+            text: "Layer separation finished. The layers are listed in the Layers panel with their names and stacking order.",
+          };
+        }
 
         case "ask_user":
           return {

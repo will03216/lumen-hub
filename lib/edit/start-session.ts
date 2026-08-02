@@ -21,8 +21,8 @@ import {
   MAX_UPLOAD_BYTES,
   imageFormatLabel,
 } from "@/lib/media/upload-formats";
-import { createEditSession } from "./sessions";
-import type { EditSession } from "./types";
+import { addRef, createEditSession } from "./sessions";
+import type { EditRefRole, EditReference, EditSession } from "./types";
 
 export type StartFromUrlOpts = {
   url: string;
@@ -109,9 +109,32 @@ export async function startEditSessionFromUrl(
   });
 }
 
-export async function startEditSessionFromFile(
-  file: File,
-): Promise<EditSession> {
+/**
+ * Add a secondary reference to an existing session.
+ *
+ * Separate from the base-image path because the two differ in what failure
+ * means: a base image that won't measure blocks the whole session, whereas a
+ * failed extra reference is a recoverable "that one didn't work". Both go
+ * through the same upload + measure, so a ref is never stored unmeasured —
+ * output sizing and coordinate normalization both read those dimensions.
+ */
+export async function addReferenceToSession(
+  sessionId: string,
+  source: File | string,
+  role: EditRefRole,
+): Promise<EditReference> {
+  const url =
+    typeof source === "string" ? source.trim() : (await uploadImage(source)).url;
+  const bytes = typeof source === "string" ? undefined : source.size;
+  const { width, height } = await measureImage(url);
+
+  const ref = addRef(sessionId, { url, width, height, bytes, role });
+  if (!ref) throw new Error("That session no longer exists.");
+  return ref;
+}
+
+/** Shared upload path — the only place that knows the route's contract. */
+async function uploadImage(file: File): Promise<{ url: string }> {
   // Check against the server's own allow-list, not a loose `image/*`. An
   // iPhone HEIC is an image by that looser test, passes every client gate,
   // and then fails the upload with a raw 415 the user can do nothing with.
@@ -130,10 +153,7 @@ export async function startEditSessionFromFile(
 
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch("/api/library/upload", {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetch("/api/library/upload", { method: "POST", body: form });
   const data = (await res.json().catch(() => ({}))) as {
     url?: string;
     error?: string;
@@ -141,12 +161,19 @@ export async function startEditSessionFromFile(
   if (!res.ok || !data.url) {
     throw new Error(data.error ?? `Upload failed (${res.status})`);
   }
+  return { url: data.url };
+}
+
+export async function startEditSessionFromFile(
+  file: File,
+): Promise<EditSession> {
+  const { url } = await uploadImage(file);
 
   // The uploaded file is now same-origin under /library-cache/, which is
   // what the canvas needs later — measuring the returned URL rather than a
   // blob: URL means the stored dimensions match the stored URL exactly.
   return startEditSessionFromUrl({
-    url: data.url,
+    url,
     name: stripExtension(file.name),
     bytes: file.size,
   });
