@@ -31,7 +31,7 @@
  */
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Download, ExternalLink, Loader2 } from "lucide-react";
 import { formatBytes } from "@/lib/edit/curl";
 import {
   buildEditRequest,
@@ -102,6 +102,59 @@ export function PayloadInspector({ session }: { session: EditSession }) {
 
 function PayloadRow({ payload: p }: { payload: WirePayload }) {
   const inline = p.value.startsWith("data:");
+  const [hash, setHash] = React.useState<string | null>(null);
+
+  // SHA-256 of the exact bytes, so "is this the same image as the source?"
+  // can be settled by comparison rather than by looking hard at two
+  // thumbnails. Note that a CLEAN payload will still not match the file on
+  // disk: everything inlined is re-encoded through a canvas, and may be
+  // downscaled to the model's pixel ceiling. Identical PIXELS, different
+  // bytes. The hash is for comparing payloads with each other and with a
+  // file you downloaded from here — not with the original upload.
+  React.useEffect(() => {
+    if (!inline) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const bytes = decodeDataUri(p.value);
+        if (!bytes || !globalThis.crypto?.subtle) return;
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        if (cancelled) return;
+        setHash(
+          Array.from(new Uint8Array(digest))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join(""),
+        );
+      } catch {
+        // A hash is a nicety; its absence must not break the inspector.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [p.value, inline]);
+
+  function download() {
+    const bytes = decodeDataUri(p.value);
+    if (!bytes) {
+      // A remote reference: we never hold those bytes, so hand over the URL
+      // rather than fabricating a download.
+      window.open(p.value, "_blank", "noreferrer");
+      return;
+    }
+    const mime = p.value.slice(5, p.value.indexOf(";"));
+    const ext = mime.split("/")[1]?.replace("jpeg", "jpg") ?? "png";
+    const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payload-${p.index}-${p.transport}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // One tick, or some browsers cancel the save.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   return (
     <div className="flex items-start gap-3 rounded-[10px] border border-border p-2">
       {/* The image element's src IS the payload string. What you are looking
@@ -140,8 +193,68 @@ function PayloadRow({ payload: p }: { payload: WirePayload }) {
           {inline
             ? `inlined · ${p.bytes !== undefined ? formatBytes(p.bytes) : "unknown size"}`
             : "sent as a URL — BytePlus fetches it directly"}
+          {hash && ` · sha256 ${hash.slice(0, 16)}…`}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+          <RowAction onClick={download}>
+            <Download className="size-3" />
+            {inline ? "Download payload" : "Open URL"}
+          </RowAction>
+          {/* The source, for an A/B. Comparing the two by eye is the whole
+              point — markup present or absent is not subtle. */}
+          <a
+            href={sourceOf(p)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-border-strong hover:text-ink"
+          >
+            <ExternalLink className="size-3" />
+            Open source
+          </a>
         </div>
       </div>
     </div>
   );
+}
+
+function RowAction({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-border-strong hover:text-ink"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Where the payload came from, for the side-by-side. */
+function sourceOf(p: WirePayload): string {
+  return p.sourceUrl;
+}
+
+/**
+ * `data:…;base64,…` → the real bytes.
+ *
+ * Returns null for anything that is not a base64 data URI — a remote URL has
+ * no bytes here to decode, and saying so is better than producing an empty
+ * file that looks like a corrupt download.
+ */
+function decodeDataUri(value: string): Uint8Array<ArrayBuffer> | null {
+  if (!value.startsWith("data:")) return null;
+  const comma = value.indexOf(",");
+  if (comma < 0 || !/;base64/i.test(value.slice(0, comma))) return null;
+  const binary = atob(value.slice(comma + 1));
+  // Explicitly over an ArrayBuffer, not the ArrayBufferLike default: crypto
+  // .subtle and Blob both refuse a view that might sit on a SharedArrayBuffer.
+  const out = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
 }

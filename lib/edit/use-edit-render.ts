@@ -173,6 +173,10 @@ export type WirePayload = {
   role: EditReference["role"];
   /** Exactly what goes into `image[]`: a URL, or a data URI. */
   value: string;
+  /** Where those bytes came from — the reference's own URL. Kept beside the
+   *  payload so an inspector can put the two side by side without going back
+   *  to the session. */
+  sourceUrl: string;
   /** Whether markup was burned into these bytes. */
   transport: "clean" | "composite";
   /** Decoded size, for a data URI. Undefined for a passed-through URL, whose
@@ -208,6 +212,7 @@ export async function resolveWirePayloads(
         label: ref.label,
         role: ref.role,
         value,
+        sourceUrl: ref.url,
         transport,
         bytes: dataUriBytes(value),
       };
