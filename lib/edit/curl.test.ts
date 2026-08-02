@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { describeWireImage, toCurl } from "./curl";
+import { dataUriBytes, describeWireImage, formatBytes, toCurl } from "./curl";
 
 describe("toCurl", () => {
   it("renders a runnable POST with the key as a shell variable", () => {
@@ -71,7 +71,11 @@ describe("describeWireImage", () => {
     );
   });
 
-  it("says what was inlined and where it came from", () => {
+  it("says the image is CLEAN when no markup was drawn in", () => {
+    // The line has to answer "is it sending the edited image?" on its own.
+    // For a point/box edit the correct payload is the untouched image, with
+    // the coordinates in the prompt — which looks like a bug unless it says
+    // so in words.
     expect(
       describeWireImage({
         kind: "inlined",
@@ -80,7 +84,7 @@ describe("describeWireImage", () => {
         annotated: false,
       }),
     ).toBe(
-      "data:image/png;base64,<inlined verbatim — from /library-cache/upload-1.png, bytes omitted>",
+      "data:image/png;base64,<clean image, no markup drawn in — from /library-cache/upload-1.png, bytes omitted>",
     );
   });
 
@@ -94,7 +98,18 @@ describe("describeWireImage", () => {
       mime: "image/jpeg",
       annotated: true,
     });
-    expect(out).toContain("annotated copy, markup burned in");
+    expect(out).toContain("brush/arrow markup burned into the pixels");
+  });
+
+  it("includes the size when the caller resolved the bytes", () => {
+    const out = describeWireImage({
+      kind: "inlined",
+      from: "/library-cache/x.png",
+      mime: "image/png",
+      annotated: false,
+      bytes: 1_500_000,
+    });
+    expect(out).toContain("1.4 MB");
   });
 });
 
@@ -103,3 +118,35 @@ function count(s: string, ch: string): number {
   for (const c of s) if (c === ch) n += 1;
   return n;
 }
+
+describe("dataUriBytes", () => {
+  it("decodes a base64 payload's real size, padding included", () => {
+    // "AAAA" is 3 bytes; each '=' removes one.
+    expect(dataUriBytes("data:image/png;base64,AAAA")).toBe(3);
+    expect(dataUriBytes("data:image/png;base64,AAA=")).toBe(2);
+    expect(dataUriBytes("data:image/png;base64,AA==")).toBe(1);
+  });
+
+  it("returns undefined for a URL, because we never hold those bytes", () => {
+    // Not a failure: BytePlus fetches a remote reference itself, so there is
+    // no size for us to report and pretending otherwise would be a guess.
+    expect(dataUriBytes("https://cdn.test/a.png")).toBeUndefined();
+    expect(dataUriBytes("/library-cache/a.png")).toBeUndefined();
+  });
+
+  it("approximates a percent-encoded data URI by its length", () => {
+    // "%3Csvg%3E" is 9 characters and decodes to 5 bytes. The estimate is
+    // deliberately the character count: this path exists so a non-base64
+    // URI reports a sane order of magnitude rather than nothing, and we do
+    // not encode anything this way — everything we inline is base64.
+    expect(dataUriBytes("data:image/svg+xml,%3Csvg%3E")).toBe(9);
+  });
+});
+
+describe("formatBytes", () => {
+  it("reads at a glance at each scale", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2 KB");
+    expect(formatBytes(1_500_000)).toBe("1.4 MB");
+  });
+});

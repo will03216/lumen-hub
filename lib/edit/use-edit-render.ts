@@ -30,6 +30,7 @@ import {
   type CompiledRefPlan,
 } from "./annotation-prompt";
 import { renderComposite } from "./composite";
+import { dataUriBytes } from "./curl";
 import { resolveSafeUrl } from "./same-origin";
 import {
   appendVersion,
@@ -158,20 +159,60 @@ export function buildEditRequest(session: EditSession): EditRequest {
 export async function resolveWireImages(
   req: EditRequest,
 ): Promise<string | string[] | undefined> {
-  const cap = maxInputPixels(req.model);
-
-  const images = await Promise.all(
-    req.orderedRefs.map((ref) => {
-      const plan = req.plans.find((p) => p.refId === ref.id);
-      return toWireImage(ref, {
-        maxPixels: cap,
-        annotations: plan?.transport === "composite" ? ref.annotations : [],
-      });
-    }),
-  );
-
+  const images = (await resolveWirePayloads(req)).map((p) => p.value);
   if (images.length === 0) return undefined;
   return images.length === 1 ? images[0] : images;
+}
+
+/** One resolved reference, with enough about it to show someone. */
+export type WirePayload = {
+  refId: string;
+  /** 1-based wire position — the number the `<bbox>` tags refer to. */
+  index: number;
+  label?: string;
+  role: EditReference["role"];
+  /** Exactly what goes into `image[]`: a URL, or a data URI. */
+  value: string;
+  /** Whether markup was burned into these bytes. */
+  transport: "clean" | "composite";
+  /** Decoded size, for a data URI. Undefined for a passed-through URL, whose
+   *  bytes we never handle — BytePlus fetches it themselves. */
+  bytes?: number;
+};
+
+/**
+ * The wire images WITH their provenance.
+ *
+ * Exists so the request inspector can show the actual bytes rather than a
+ * description of them — "is it sending the edited image or the clean one?" is
+ * a question about this exact array, and answering it from a reimplementation
+ * would answer a different question. `resolveWireImages` is a projection of
+ * this, so the preview and the render cannot disagree.
+ */
+export async function resolveWirePayloads(
+  req: EditRequest,
+): Promise<WirePayload[]> {
+  const cap = maxInputPixels(req.model);
+
+  return Promise.all(
+    req.orderedRefs.map(async (ref, i) => {
+      const plan = req.plans.find((p) => p.refId === ref.id);
+      const transport = plan?.transport ?? "clean";
+      const value = await toWireImage(ref, {
+        maxPixels: cap,
+        annotations: transport === "composite" ? ref.annotations : [],
+      });
+      return {
+        refId: ref.id,
+        index: i + 1,
+        label: ref.label,
+        role: ref.role,
+        value,
+        transport,
+        bytes: dataUriBytes(value),
+      };
+    }),
+  );
 }
 
 /**

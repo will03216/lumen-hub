@@ -28,7 +28,14 @@
 /** What a reference will look like on the wire, without the bytes. */
 export type WireImageDescriptor =
   | { kind: "url"; url: string }
-  | { kind: "inlined"; from: string; mime: string; annotated: boolean };
+  | {
+      kind: "inlined";
+      from: string;
+      mime: string;
+      annotated: boolean;
+      /** Decoded size, when the caller has actually resolved the bytes. */
+      bytes?: number;
+    };
 
 /**
  * The value that stands in for a reference in the printed body.
@@ -40,10 +47,41 @@ export type WireImageDescriptor =
  */
 export function describeWireImage(d: WireImageDescriptor): string {
   if (d.kind === "url") return d.url;
+  // Spelled out rather than implied. "Is it sending the edited image?" is the
+  // question this line has to answer on its own, and for a point/box edit the
+  // correct answer — a clean image, with the coordinates in the prompt — looks
+  // exactly like a bug unless it says so.
   const what = d.annotated
-    ? "annotated copy, markup burned in"
-    : "inlined verbatim";
-  return `data:${d.mime};base64,<${what} — from ${d.from}, bytes omitted>`;
+    ? "annotated copy: brush/arrow markup burned into the pixels"
+    : "clean image, no markup drawn in";
+  const size = d.bytes !== undefined ? `, ${formatBytes(d.bytes)}` : "";
+  return `data:${d.mime};base64,<${what} — from ${d.from}${size}, bytes omitted>`;
+}
+
+/**
+ * Decoded byte count of a `data:` URI; undefined for anything else.
+ *
+ * Undefined is meaningful, not a failure: a remote URL has no size we can
+ * know without fetching it, and we never do — BytePlus fetches those
+ * themselves. Base64 decodes to 3 bytes per 4 characters, minus the padding.
+ */
+export function dataUriBytes(value: string): number | undefined {
+  if (!value.startsWith("data:")) return undefined;
+  const comma = value.indexOf(",");
+  if (comma < 0) return undefined;
+  const payload = value.slice(comma + 1);
+  // A data: URI can be percent-encoded rather than base64; then each
+  // character is roughly a byte and the length is already the right ballpark.
+  if (!/;base64/i.test(value.slice(0, comma))) return payload.length;
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  return Math.floor((payload.length * 3) / 4) - padding;
+}
+
+/** Human size for a byte count, in the units a person reads at a glance. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export type CurlInput = {

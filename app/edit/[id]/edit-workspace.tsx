@@ -51,6 +51,7 @@ import { ReferencesPanel } from "./references-panel";
 import { CanvasBoundary } from "./canvas-boundary";
 import { LayersPanel } from "./layers-panel";
 import { PresetStrip } from "./preset-strip";
+import { PayloadInspector } from "./payload-inspector";
 import { RequestCurl } from "./request-curl";
 
 /** Kill switch for §5B. Set NEXT_PUBLIC_EDIT_LAYERS=0 to hide the panel. */
@@ -558,6 +559,10 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
               {/* The other half of "what did it actually send?" — the wire
                   request, with the key left out. */}
               <RequestCurl session={session} />
+              {/* And the bytes themselves — the cURL body elides them, and
+                  "is it sending the edited image?" is a question only the
+                  actual payload can answer. */}
+              <PayloadInspector session={session} />
             </>
           )}
         </div>

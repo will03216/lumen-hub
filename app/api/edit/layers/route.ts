@@ -39,6 +39,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BytePlusError, separateLayers, type LayerGenParams } from "@/lib/byteplus";
 import { normalizeLayerResponse } from "@/lib/edit/layers-normalize";
+import { dataUriBytes } from "@/lib/edit/curl";
 import { logBytePlusError, logRouteError } from "@/lib/server-log";
 import { getUserKeys, keyErrorResponse } from "@/lib/server/user-keys";
 
@@ -191,21 +192,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Decoded byte count of a `data:` URI, or undefined for anything else (a
- *  remote URL has no size we can know without fetching it — that one stays
- *  upstream's problem). Base64 decodes to 3 bytes per 4 characters, minus
- *  one per `=` of padding. */
-function dataUriBytes(image: string): number | undefined {
-  if (!image.startsWith("data:")) return undefined;
-  const comma = image.indexOf(",");
-  if (comma < 0) return undefined;
-  const payload = image.slice(comma + 1);
-  // A `data:` URI can be percent-encoded rather than base64; then each
-  // character is roughly a byte and the length is already the right ballpark.
-  if (!/;base64/i.test(image.slice(0, comma))) return payload.length;
-  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-  return Math.floor((payload.length * 3) / 4) - padding;
-}
 
 function formatMb(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
