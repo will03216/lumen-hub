@@ -10,7 +10,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getStory, updateStory } from "@/lib/story/stories";
+import { getStory, resolveSceneAssets, updateStory } from "@/lib/story/stories";
+import { isPubliclyFetchable } from "@/lib/story/image-format";
 import type { Scene } from "@/lib/story/stories";
 import { DEFAULT_VIDEO_MODEL_ID, findVideoModel, VIDEO_MODELS } from "@/lib/studio/models";
 
@@ -91,11 +92,52 @@ export function useStoryGeneration(storyId: string) {
 
       patchGen(sceneId, { status: "submitting", elapsedMs: 0, error: undefined, taskId: undefined });
 
-      // Build references from per-scene assets.
+      // Two different mechanisms, deliberately kept apart:
+      //
+      //   references — WHO/WHAT should appear (subject, environment). The
+      //                model reads identity from these.
+      //   images     — literal frames. first_frame/last_frame pin the clip's
+      //                endpoints and the model interpolates between them;
+      //                reference_image is loose visual guidance.
+      //
+      // Sending a character portrait as a first_frame would force the clip to
+      // literally open on that portrait, which is not what the slot means.
+      // Resolve against the story-wide defaults at generation time rather than
+      // reading scene.assets directly — that is what lets a character set once
+      // on the story apply to every scene, and lets editing it later actually
+      // take effect on scenes that never overrode it.
+      const assets = resolveSceneAssets(scene.assets, getStory(storyId)?.defaultAssets);
+
+      // The renderer downloads every reference, so only publicly fetchable
+      // URLs can go on the wire. A data URI here is a hard 400 that kills the
+      // whole scene — dropping it costs the reference but still produces a
+      // clip, and `skipped` tells the user why.
+      let skipped = 0;
+      const usable = (url: string | undefined): string | null => {
+        const u = url?.trim();
+        if (!u) return null;
+        if (isPubliclyFetchable(u)) return u;
+        skipped++;
+        return null;
+      };
+
       const references: Array<{ type: "image"; role: "subject" | "environment"; url: string }> = [];
-      if (scene.assets.character) references.push({ type: "image", role: "subject", url: scene.assets.character });
-      if (scene.assets.background) references.push({ type: "image", role: "environment", url: scene.assets.background });
-      if (scene.assets.prop) references.push({ type: "image", role: "subject", url: scene.assets.prop });
+      const character = usable(assets.character);
+      const background = usable(assets.background);
+      const prop = usable(assets.prop);
+      if (character) references.push({ type: "image", role: "subject", url: character });
+      if (background) references.push({ type: "image", role: "environment", url: background });
+      if (prop) references.push({ type: "image", role: "subject", url: prop });
+
+      const images: Array<{ url: string; role: "first_frame" | "last_frame" | "reference_image" }> = [];
+      const first = usable(assets.firstFrame);
+      const last = usable(assets.lastFrame);
+      if (first) images.push({ url: first, role: "first_frame" });
+      if (last) images.push({ url: last, role: "last_frame" });
+      for (const raw of assets.refImages ?? []) {
+        const u = usable(raw);
+        if (u) images.push({ url: u, role: "reference_image" });
+      }
 
       // Clamp duration to the nearest value the selected model accepts.
       const caps = findVideoModel(model)?.caps;
@@ -112,6 +154,7 @@ export function useStoryGeneration(storyId: string) {
         watermark: false,
         audio: scene.audio ?? false,
         ...(references.length > 0 ? { references } : {}),
+        ...(images.length > 0 ? { images } : {}),
       };
 
       function fail(msg: string) {
@@ -133,6 +176,11 @@ export function useStoryGeneration(storyId: string) {
         if (!res.ok || !data.id) {
           fail(data.error ?? `Submit failed (${res.status})`);
           return;
+        }
+        if (skipped > 0) {
+          patchGen(sceneId, {
+            error: `${skipped} reference image${skipped > 1 ? "s" : ""} skipped — re-upload them so they get a public URL`,
+          });
         }
 
         const taskId = data.id as string;

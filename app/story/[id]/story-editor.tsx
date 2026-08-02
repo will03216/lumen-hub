@@ -14,6 +14,9 @@ import {
   updateStory,
   deleteStory,
   newSceneId,
+  sceneAssetCount,
+  inheritedAssetKeys,
+  resolveSceneAssets,
   type Story,
   type Scene,
   type SceneAssets,
@@ -108,6 +111,8 @@ export function StoryEditor({ storyId }: { storyId: string }) {
     save({ scenes: arr.map((s, i) => ({ ...s, index: i })) });
   }
 
+  const storyImageCount = story ? sceneAssetCount(story.defaultAssets ?? {}) : 0;
+
   const scriptDetected = React.useMemo(
     () => (story ? looksLikeScript(story.prompt) : false),
     [story],
@@ -137,9 +142,27 @@ export function StoryEditor({ storyId }: { storyId: string }) {
     void generateScene(scene, DEFAULT_VIDEO_MODEL_ID);
   }
 
+  /** Scenes currently submitting or polling — drives the button's busy state. */
+  const busyCount = React.useMemo(
+    () =>
+      Object.values(genMap).filter(
+        (g) => g.status === "submitting" || g.status === "polling",
+      ).length,
+    [genMap],
+  );
+  /** Scenes with no finished clip yet. */
+  const pendingCount = story
+    ? story.scenes.filter((s) => s.clipStatus !== "done").length
+    : 0;
+
   function handleGenerateAll() {
     if (!story) return;
-    void generateAll(story.scenes, DEFAULT_VIDEO_MODEL_ID);
+    // Skip scenes that already rendered — re-running them costs a video
+    // generation each and throws away a clip the user may have approved.
+    // When everything is already done, treat the click as a deliberate
+    // re-render of the whole story.
+    const pending = story.scenes.filter((s) => s.clipStatus !== "done");
+    void generateAll(pending.length > 0 ? pending : story.scenes, DEFAULT_VIDEO_MODEL_ID);
   }
 
   // ── AI breakdown (one click: cut + write) ──────────────────────────────
@@ -164,6 +187,8 @@ export function StoryEditor({ storyId }: { storyId: string }) {
         body: JSON.stringify({
           story: story.prompt,
           targetDuration: story.targetDuration,
+          // The model looks at these while writing the shot list.
+          assets: story.defaultAssets ?? {},
         }),
       });
       const data = await res.json();
@@ -374,6 +399,26 @@ export function StoryEditor({ storyId }: { storyId: string }) {
                   </p>
                 )}
                 <ScriptFormatReport source={story.prompt} />
+
+                {/* Step 1 is where these belong: the breakdown model is
+                    vision-capable, so it reads these images while writing the
+                    shot list — not just at render time. */}
+                <div className="rounded-[10px] border border-border bg-panel px-3 py-2.5">
+                  <div className="mb-1 flex items-baseline gap-1.5">
+                    <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-dim">
+                      Reference images
+                    </span>
+                    <span className="font-mono text-[9px] text-ink-mute">
+                      {storyImageCount > 0
+                        ? `${storyImageCount} — analysed during breakdown, then used on every scene`
+                        : "optional — the model looks at these when writing prompts"}
+                    </span>
+                  </div>
+                  <SceneAssetPicker
+                    assets={story.defaultAssets ?? {}}
+                    onChange={(defaultAssets) => save({ defaultAssets })}
+                  />
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px] text-ink-mute mr-auto">
                     {story.prompt.trim().split(/\s+/).filter(Boolean).length} words
@@ -420,6 +465,39 @@ export function StoryEditor({ storyId }: { storyId: string }) {
             {story.scenes.length > 0 && (
               <Panel index="02" title="Scenes">
                 <div className="flex flex-col gap-3">
+                  {/* Generate-all was only reachable from the storyboard view
+                      and a shortcut card — but scene editing happens here, so
+                      this is where you want to fire the batch after tweaking. */}
+                  <div className="flex items-center gap-2 border-b border-border pb-3">
+                    <span className="mr-auto font-mono text-[10px] text-ink-mute">
+                      {story.scenes.length} scene{story.scenes.length > 1 ? "s" : ""}
+                      {" · "}
+                      {story.scenes.reduce((n, s) => n + s.duration, 0)}s total
+                      {pendingCount > 0 && ` · ${pendingCount} not yet rendered`}
+                    </span>
+                    {busyCount > 0 && (
+                      <span className="font-mono text-[10px] text-accent">
+                        {busyCount} running…
+                      </span>
+                    )}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={handleGenerateAll}
+                      disabled={busyCount > 0 || story.scenes.length === 0}
+                      title={
+                        pendingCount > 0
+                          ? `Render the ${pendingCount} scene${pendingCount > 1 ? "s" : ""} that haven't finished yet`
+                          : "Every scene has a clip — this re-renders all of them"
+                      }
+                    >
+                      {busyCount > 0
+                        ? "Generating…"
+                        : pendingCount > 0
+                          ? `▶ Generate ${pendingCount} scene${pendingCount > 1 ? "s" : ""}`
+                          : "▶ Re-generate all"}
+                    </Button>
+                  </div>
                   {story.scenes.map((scene, i) => (
                     <SceneCard
                       key={scene.id}
@@ -427,6 +505,7 @@ export function StoryEditor({ storyId }: { storyId: string }) {
                       isFirst={i === 0}
                       isLast={i === story.scenes.length - 1}
                       genStatus={genMap[scene.id]?.status ?? "idle"}
+                      storyAssets={story.defaultAssets}
                       cardRef={(el) => { sceneRefs.current[scene.id] = el; }}
                       onChange={(patch) => handleSceneChange(scene.id, patch)}
                       onAssetChange={(assets) => handleSceneChange(scene.id, { assets })}
@@ -521,6 +600,27 @@ export function StoryEditor({ storyId }: { storyId: string }) {
                   </label>
                 </div>
 
+                {/* Story-wide image defaults */}
+                <div className="flex flex-col gap-1.5 pt-1 border-t border-border">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-dim">
+                    Story images
+                  </span>
+                  <p className="font-mono text-[9px] leading-relaxed text-ink-mute">
+                    Applied to every scene. A scene that sets its own value
+                    overrides it — per field, so a scene can change just its
+                    first frame and keep the story&apos;s character. Upload them
+                    in §01 Story, where the breakdown model can also read them.
+                  </p>
+                  {sceneAssetCount(story.defaultAssets ?? {}) > 0 && (
+                    <p className="font-mono text-[9px] text-ink-mute">
+                      {sceneAssetCount(story.defaultAssets ?? {})} image
+                      {sceneAssetCount(story.defaultAssets ?? {}) > 1 ? "s" : ""} shared
+                      across {story.scenes.length} scene
+                      {story.scenes.length === 1 ? "" : "s"}
+                    </p>
+                  )}
+                </div>
+
                 {/* Background audio */}
                 <div className="flex flex-col gap-1.5 pt-1 border-t border-border">
                   <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-dim">
@@ -589,10 +689,12 @@ export function StoryEditor({ storyId }: { storyId: string }) {
 // ─────────────────────────── Scene Card ───────────────────────────────────
 
 function SceneCard({
-  scene, isFirst, isLast, genStatus, cardRef,
+  scene, isFirst, isLast, genStatus, cardRef, storyAssets,
   onChange, onAssetChange, onRemove, onMove, onGenerate, onApprove,
 }: {
   scene: Scene;
+  /** Story-wide image defaults this scene inherits from. */
+  storyAssets: SceneAssets | undefined;
   isFirst: boolean;
   isLast: boolean;
   genStatus: string;
@@ -608,7 +710,10 @@ function SceneCard({
   const [assetsOpen, setAssetsOpen] = React.useState(false);
   const isBusy = genStatus === "submitting" || genStatus === "polling";
   const hasClip = !!scene.clipUrl;
-  const assetCount = Object.values(scene.assets).filter(Boolean).length;
+  const inherited = inheritedAssetKeys(scene.assets, storyAssets);
+  // Count what will actually be SENT, not just what this scene stores — an
+  // inherited character is as real to the render as one set here.
+  const assetCount = sceneAssetCount(resolveSceneAssets(scene.assets, storyAssets));
 
   return (
     <div
@@ -680,7 +785,20 @@ function SceneCard({
           {assetsOpen && (
             <div className="flex flex-col gap-3 rounded-[8px] border border-border bg-panel p-3">
               <div>
-                <p className="mb-2 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">Reference images</p>
+                <p className="mb-2 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-mute">
+                  Reference images
+                  {inherited.size > 0 && (
+                    <span className="ml-1.5 normal-case tracking-normal text-accent">
+                      · {inherited.size} inherited from story
+                    </span>
+                  )}
+                </p>
+                {inherited.size > 0 && (
+                  <p className="mb-2 font-mono text-[9px] leading-relaxed text-ink-mute">
+                    {[...inherited].join(", ")} come from Story images. Set one
+                    here to override it for this scene only.
+                  </p>
+                )}
                 <SceneAssetPicker assets={scene.assets} onChange={onAssetChange} />
               </div>
               <div className="border-t border-border pt-3">

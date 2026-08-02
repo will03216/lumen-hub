@@ -28,7 +28,94 @@ export type SceneAssets = {
   background?: string;
   /** Reference image URL or data URI for a key prop. */
   prop?: string;
+
+  // ── Frame control ────────────────────────────────────────────────────
+  // Distinct from the subject references above: these pin the literal first
+  // and last frames of the clip, which is how you bridge two shots or hit an
+  // exact end pose. The model interpolates between them.
+
+  /** Image the clip opens on. Sent with role "first_frame". */
+  firstFrame?: string;
+  /** Image the clip lands on. Sent with role "last_frame". Pairing this with
+   *  the previous scene's last frame is what makes cuts continuous. */
+  lastFrame?: string;
+
+  /** Extra visual references, sent with role "reference_image". Unlike the
+   *  named slots these carry no semantic role — use them for style, palette,
+   *  or secondary subjects. */
+  refImages?: string[];
 };
+
+/**
+ * Merge story-wide defaults with a scene's own assets.
+ *
+ * Per-field, not all-or-nothing: a scene that sets only its own first frame
+ * still inherits the story's character reference. That is what makes a
+ * story-level cast usable — you set the character once and each scene only
+ * overrides the one thing that differs.
+ *
+ * `refImages` is replaced wholesale rather than concatenated. Appending would
+ * silently push past the model's reference limit as scenes accumulate, and
+ * "my scene's refs plus some others I can't see" is not a useful mental model.
+ */
+export function resolveSceneAssets(
+  scene: SceneAssets | undefined,
+  defaults: SceneAssets | undefined,
+): SceneAssets {
+  const s = scene ?? {};
+  const d = defaults ?? {};
+  const pick = (a?: string, b?: string) => (a?.trim() ? a : b?.trim() ? b : undefined);
+
+  const sceneRefs = s.refImages?.filter((u) => u?.trim());
+  const defaultRefs = d.refImages?.filter((u) => u?.trim());
+
+  const out: SceneAssets = {
+    character: pick(s.character, d.character),
+    background: pick(s.background, d.background),
+    prop: pick(s.prop, d.prop),
+    firstFrame: pick(s.firstFrame, d.firstFrame),
+    lastFrame: pick(s.lastFrame, d.lastFrame),
+    refImages: sceneRefs?.length ? sceneRefs : defaultRefs?.length ? defaultRefs : undefined,
+  };
+
+  // Drop undefined keys so a resolved object compares cleanly and doesn't
+  // write `{"character": undefined}` noise into localStorage.
+  for (const k of Object.keys(out) as (keyof SceneAssets)[]) {
+    if (out[k] === undefined) delete out[k];
+  }
+  return out;
+}
+
+/** Which fields a scene is inheriting rather than setting itself — the UI
+ *  uses this to label a slot as coming from the story defaults. */
+export function inheritedAssetKeys(
+  scene: SceneAssets | undefined,
+  defaults: SceneAssets | undefined,
+): Set<keyof SceneAssets> {
+  const s = scene ?? {};
+  const d = defaults ?? {};
+  const keys = new Set<keyof SceneAssets>();
+  for (const k of ["character", "background", "prop", "firstFrame", "lastFrame"] as const) {
+    if (!s[k]?.trim() && d[k]?.trim()) keys.add(k);
+  }
+  if (!s.refImages?.filter((u) => u?.trim()).length && d.refImages?.filter((u) => u?.trim()).length) {
+    keys.add("refImages");
+  }
+  return keys;
+}
+
+/** Every image a scene contributes, in the order the model should see them.
+ *  Exported so the UI can show a count without duplicating the rules. */
+export function sceneAssetCount(a: SceneAssets): number {
+  return (
+    (a.character ? 1 : 0) +
+    (a.background ? 1 : 0) +
+    (a.prop ? 1 : 0) +
+    (a.firstFrame ? 1 : 0) +
+    (a.lastFrame ? 1 : 0) +
+    (a.refImages?.length ?? 0)
+  );
+}
 
 export type Scene = {
   id: string;
@@ -77,6 +164,17 @@ export type Story = StoryMeta & {
   backgroundAudioUrl?: string;
   /** Global audio default — new scenes inherit this value. */
   globalAudio: boolean;
+  /**
+   * Story-wide image defaults. Every scene inherits these per-field unless it
+   * sets its own, so a recurring character or a fixed location is configured
+   * once instead of pasted into every scene.
+   *
+   * Resolved at generation time via resolveSceneAssets(), NOT copied into
+   * scenes on save — copying would freeze each scene at the value that
+   * happened to exist when it was created, and editing the default later
+   * would silently stop applying.
+   */
+  defaultAssets?: SceneAssets;
 };
 
 type StoreShape = {
