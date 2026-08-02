@@ -42,7 +42,7 @@ import {
 } from "@/lib/edit/types";
 import { cn } from "@/lib/utils";
 import EditCanvasLoader from "./canvas-loader";
-import type { EditTool } from "./edit-canvas";
+import type { EditTool, GeometryPatch } from "./edit-canvas";
 import { ToolRail } from "./tool-rail";
 import { AnnotationPanel } from "./annotation-panel";
 import { AgentPanel } from "./agent-panel";
@@ -127,6 +127,28 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
       }
       setCapWarning(null);
       setSelectedId(ann.id);
+    },
+    [sessionId, activeRefId, session],
+  );
+
+  /**
+   * A mark was moved or resized on the canvas.
+   *
+   * Kind-checked before the spread: the patch is discriminated, so a box's
+   * rect landing on a point is a compile error here rather than a shape with
+   * two geometries in the store.
+   */
+  const handleGeometry = React.useCallback(
+    (id: string, geometry: GeometryPatch) => {
+      if (!activeRefId) return;
+      const current = session?.refs
+        .find((r) => r.id === activeRefId)
+        ?.annotations.find((a) => a.id === id);
+      if (!current || current.kind !== geometry.kind) return;
+      upsertAnnotation(sessionId, activeRefId, {
+        ...current,
+        ...geometry,
+      } as Annotation);
     },
     [sessionId, activeRefId, session],
   );
@@ -274,6 +296,7 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onCommit={handleCommit}
+                onGeometry={handleGeometry}
               />
             ) : (
               <div className="flex size-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">

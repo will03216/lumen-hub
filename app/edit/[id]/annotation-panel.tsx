@@ -17,7 +17,7 @@
 
 import * as React from "react";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
-import type { Annotation } from "@/lib/edit/types";
+import { markColor, type Annotation } from "@/lib/edit/types";
 import { cn } from "@/lib/utils";
 
 export function AnnotationPanel({
@@ -62,7 +62,11 @@ export function AnnotationPanel({
           <div className="flex items-center gap-2">
             <span
               className="size-2.5 shrink-0 rounded-full"
-              style={{ background: a.color }}
+              // markColor, not a.color: point and box are drawn in the
+              // display colour and never carry theirs into the request, so
+              // the dot has to agree with the canvas rather than with the
+              // stored value (which is also what old sessions have).
+              style={{ background: markColor(a) }}
               aria-hidden
             />
             <span className="flex-1 truncate font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim">

@@ -37,7 +37,7 @@ import * as React from "react";
 import { Download, Eye, EyeOff, RotateCcw, Columns2 } from "lucide-react";
 import { SliderOverlay } from "@/app/compare/slider-overlay";
 import { resolveSafeUrl } from "@/lib/edit/same-origin";
-import type { Annotation, EditVersion } from "@/lib/edit/types";
+import { markColor, type Annotation, type EditVersion } from "@/lib/edit/types";
 import { cn } from "@/lib/utils";
 
 export function ResultView({
@@ -271,7 +271,9 @@ function MarksOverlay({
       {annotations
         .filter((a) => !a.hidden)
         .map((a) => {
-          const stroke = a.color;
+          // Same rule as the canvas: vector marks are drawn in the display
+          // colour, raster marks in the one that was burned into the pixels.
+          const stroke = markColor(a);
           if (a.kind === "point") {
             return (
               <circle

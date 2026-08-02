@@ -256,3 +256,31 @@ export const MAX_VERSIONS = 50;
  *  which is what makes "do not reproduce the magenta markup" a instruction
  *  the model can actually act on. */
 export const MARKER_COLOR = "#FF00E5";
+
+/**
+ * On-canvas colour for VECTOR marks — point and box.
+ *
+ * Display only, and safe to change on taste alone. Point and box travel to
+ * the model as `<point>` / `<bbox>` coordinate tags with the image sent
+ * CLEAN, so nothing about how they are painted here ever reaches Seedream.
+ *
+ * Raster marks are the opposite and must stay MARKER_COLOR: brush and arrow
+ * are burned into the pixels, and the prose that goes with them names the
+ * colour ("do not reproduce the magenta markup"). Recolour those and the
+ * sentence stops describing the picture — see colorNames() in
+ * annotation-prompt.ts, which reads the stored colour of raster marks only.
+ *
+ * Green because it reads as "selected region" rather than "damage", and it
+ * separates cleanly from the magenta that does mean something.
+ */
+export const VECTOR_MARK_COLOR = "#7BE05B";
+/** Interior wash for a box. Low enough to read the image through it. */
+export const VECTOR_MARK_FILL = "rgba(123, 224, 91, 0.22)";
+
+/** The colour a mark is drawn in, by kind. See the note above: vector marks
+ *  are a UI choice, raster marks are part of the request. */
+export function markColor(a: Pick<Annotation, "kind" | "color">): string {
+  return a.kind === "point" || a.kind === "box"
+    ? VECTOR_MARK_COLOR
+    : a.color || MARKER_COLOR;
+}

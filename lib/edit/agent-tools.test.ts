@@ -27,6 +27,7 @@ import {
   type ToolPlan,
 } from "./agent-tools";
 import { buildAnnotation } from "./annotations";
+import { MARKER_COLOR, VECTOR_MARK_COLOR } from "./types";
 import type { Annotation, EditReference, EditSession, EditVersion } from "./types";
 
 // ─────────────────────────── Fixtures ─────────────────────────────────────
@@ -333,7 +334,15 @@ describe("place_* plans", () => {
       "Mark 02",
       "Arrow 01",
     ]);
-    expect(existing.every((a) => a.color === "#FF00E5")).toBe(true);
+    // Colour by kind, identical on both paths: vector marks are drawn in the
+    // display green, raster marks in the magenta that gets burned into the
+    // pixels and named in the prose.
+    expect(existing.map((a) => a.color)).toEqual([
+      VECTOR_MARK_COLOR,
+      VECTOR_MARK_COLOR,
+      VECTOR_MARK_COLOR,
+      MARKER_COLOR,
+    ]);
   });
 
   it("carries the note and the arrow intent beside the draft", () => {

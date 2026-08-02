@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 import { buildAnnotation, nextLabel } from "./annotations";
-import { MARKER_COLOR, type Annotation } from "./types";
+import { MARKER_COLOR, VECTOR_MARK_COLOR, type Annotation } from "./types";
 
 function mark(kind: Annotation["kind"], label: string): Annotation {
   const base = { id: label, label, color: MARKER_COLOR, createdAt: 0 };
@@ -80,17 +80,45 @@ describe("buildAnnotation", () => {
       id: "abc",
       kind: "box",
       label: "Region 01",
-      color: "#00FFEE",
+      // Not the caller's colour: a box is drawn on the canvas and compiled to
+      // a <bbox> tag, never painted into the image, so its colour is a
+      // display decision this function owns.
+      color: VECTOR_MARK_COLOR,
       createdAt: 1234,
       rect: { x: 10, y: 20, w: 30, h: 40 },
     });
   });
 
-  it("defaults to the marker colour", () => {
-    const a = buildAnnotation({ kind: "point", at: { x: 1, y: 2 } }, [], {
-      id: "x",
+  it("gives vector marks the display colour and raster marks the marker colour", () => {
+    // The split that matters: brush and arrow are burned into the pixels and
+    // the prose names their colour ("do not reproduce the magenta markup"),
+    // so recolouring those would make the sentence describe the wrong thing.
+    // Point and box never touch the pixels.
+    const point = buildAnnotation({ kind: "point", at: { x: 1, y: 2 } }, [], {
+      id: "p",
     });
-    expect(a.color).toBe(MARKER_COLOR);
+    const brush = buildAnnotation(
+      { kind: "brush", points: [0, 0, 1, 1], width: 4 },
+      [],
+      { id: "b" },
+    );
+    expect(point.color).toBe(VECTOR_MARK_COLOR);
+    expect(brush.color).toBe(MARKER_COLOR);
+  });
+
+  it("lets the caller pick a raster colour but never a vector one", () => {
+    const arrow = buildAnnotation(
+      { kind: "arrow", from: { x: 0, y: 0 }, to: { x: 5, y: 5 }, width: 3 },
+      [],
+      { id: "a", color: "#00FFEE" },
+    );
+    const box = buildAnnotation(
+      { kind: "box", rect: { x: 0, y: 0, w: 2, h: 2 } },
+      [],
+      { id: "x", color: "#00FFEE" },
+    );
+    expect(arrow.color).toBe("#00FFEE");
+    expect(box.color).toBe(VECTOR_MARK_COLOR);
   });
 
   it("builds every kind with its own geometry field", () => {

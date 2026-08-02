@@ -36,11 +36,14 @@ import {
   Arrow,
   Circle,
   Image as KonvaImage,
+  Label,
   Layer,
   Line,
   Rect,
   Stage,
+  Tag,
   Text,
+  Transformer,
 } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import {
@@ -56,9 +59,12 @@ import { resolveSafeUrl } from "@/lib/edit/same-origin";
 // one shape and one labelling path.
 import type { DraftAnnotation } from "@/lib/edit/annotations";
 import {
-  MARKER_COLOR,
+  VECTOR_MARK_COLOR,
+  VECTOR_MARK_FILL,
+  markColor,
   type Annotation,
   type EditReference,
+  type Rect as ImageRect,
   type Vec,
 } from "@/lib/edit/types";
 
@@ -75,12 +81,29 @@ export type EditCanvasProps = {
   /** Fired once per completed gesture. The parent assigns id/label/createdAt,
    *  because labelling depends on what is already on the reference. */
   onCommit: (draft: DraftAnnotation) => void;
+  /**
+   * Fired when an EXISTING mark is moved or resized.
+   *
+   * Discriminated by kind rather than typed as a partial of the union: the
+   * parent spreads it onto the stored annotation, and `Partial<Annotation>`
+   * would let a box's rect land on a point.
+   */
+  onGeometry: (id: string, geometry: GeometryPatch) => void;
 };
+
+export type GeometryPatch =
+  | { kind: "point"; at: Vec }
+  | { kind: "box"; rect: ImageRect }
+  | { kind: "brush"; points: number[] }
+  | { kind: "arrow"; from: Vec; to: Vec };
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
 /** A drag shorter than this is a click, not a box/arrow. In image px. */
 const MIN_DRAG_PX = 3;
+/** Smallest box a resize may produce, in SCREEN px — the transformer works in
+ *  screen space, and a box below this is impossible to grab again. */
+const MIN_BOX_SCREEN_PX = 12;
 
 export default function EditCanvas({
   reference,
@@ -91,6 +114,7 @@ export default function EditCanvas({
   selectedId,
   onSelect,
   onCommit,
+  onGeometry,
 }: EditCanvasProps) {
   const wrapRef = React.useRef<HTMLDivElement>(null);
   const stageRef = React.useRef<Konva.Stage>(null);
@@ -98,6 +122,7 @@ export default function EditCanvas({
   const draftLineRef = React.useRef<Konva.Line>(null);
   const draftRectRef = React.useRef<Konva.Rect>(null);
   const draftArrowRef = React.useRef<Konva.Arrow>(null);
+  const transformerRef = React.useRef<Konva.Transformer>(null);
 
   const [size, setSize] = React.useState({ w: 0, h: 0 });
   const [img, setImg] = React.useState<HTMLImageElement | null>(null);
@@ -201,6 +226,28 @@ export default function EditCanvas({
     draftLayerRef.current?.batchDraw();
   }, [tool]);
 
+  // ── Resize handles ──────────────────────────────────────────────────────
+  //
+  // Attached imperatively because Konva's Transformer takes NODES, not
+  // props — it has to find the live shape for the current selection. Boxes
+  // only: a point has nothing to resize, and scaling a brush stroke or an
+  // arrow would change what was drawn rather than where it is.
+  //
+  // Re-runs on `annotations` as well as on the selection, because the node
+  // for a given id is replaced when the store hands back a new list.
+  React.useEffect(() => {
+    const tr = transformerRef.current;
+    const stage = stageRef.current;
+    if (!tr || !stage) return;
+    const sel = annotations.find((a) => a.id === selectedId && !a.hidden);
+    const node =
+      sel?.kind === "box"
+        ? stage.findOne<Konva.Rect>(`#${selectedId}`)
+        : undefined;
+    tr.nodes(node ? [node] : []);
+    tr.getLayer()?.batchDraw();
+  }, [selectedId, annotations]);
+
   const fit = fitContain(size.w, size.h, imgW, imgH);
   const eff = fit.scale * zoom;
   const tx = fit.dx + pan.x;
@@ -224,17 +271,18 @@ export default function EditCanvas({
 
     // The base image sits in a listening={false} layer, so a click on the
     // picture itself reports the Stage as its target; only a committed
-    // annotation reports a shape.
+    // annotation — or a resize handle — reports a shape.
     const onEmptyCanvas = e.target === e.target.getStage();
-    if (onEmptyCanvas) onSelect(null);
+    if (!onEmptyCanvas) {
+      // The gesture belongs to that shape: select it, drag it, or pull one of
+      // its handles. Starting a fresh draw here as well would lay a second
+      // mark over the one being adjusted, which is exactly what made boxes
+      // feel un-editable — every attempt to grab one drew another.
+      return;
+    }
+    onSelect(null);
 
     if (tool === "point") {
-      // Clicking an existing mark should select it, not stack a new point on
-      // top of it. Its own onClick does the selecting; we just stay out of
-      // the way. Without this, the point tool cannot select anything — it
-      // creates a mark first and the shape's handler then reassigns the
-      // selection to the older one, so the new mark appears unselected.
-      if (!onEmptyCanvas) return;
       // Reject rather than clamp. A click in a letterbox band that silently
       // snapped to the image edge would look like a misplaced mark, not a
       // missed one — and the user gets no signal they aimed outside.
@@ -426,9 +474,40 @@ export default function EditCanvas({
                 annotation={a}
                 selected={a.id === selectedId}
                 scale={eff}
+                imgW={imgW}
+                imgH={imgH}
                 onSelect={onSelect}
+                onGeometry={onGeometry}
               />
             ))}
+
+          {/* Sized in image space like everything else, so every on-screen
+              dimension is divided by the effective scale — otherwise the
+              handles balloon as you zoom in and vanish as you zoom out. */}
+          <Transformer
+            ref={transformerRef}
+            rotateEnabled={false}
+            keepRatio={false}
+            ignoreStroke
+            flipEnabled={false}
+            anchorSize={9 / eff}
+            anchorCornerRadius={2 / eff}
+            anchorStrokeWidth={1.5 / eff}
+            borderStrokeWidth={1 / eff}
+            anchorFill="#ffffff"
+            anchorStroke={VECTOR_MARK_COLOR}
+            borderStroke={VECTOR_MARK_COLOR}
+            borderDash={[4 / eff, 3 / eff]}
+            // Refuse a resize that would collapse the box rather than letting
+            // it invert. The boxes here are in SCREEN pixels, unlike
+            // everything else in this file.
+            boundBoxFunc={(oldBox, newBox) =>
+              newBox.width < MIN_BOX_SCREEN_PX ||
+              newBox.height < MIN_BOX_SCREEN_PX
+                ? oldBox
+                : newBox
+            }
+          />
         </Layer>
 
         {/* Draft layer — mutated imperatively during a gesture, never via
@@ -446,10 +525,15 @@ export default function EditCanvas({
             perfectDrawEnabled={false}
             shadowForStrokeEnabled={false}
           />
+          {/* The box preview is green like the committed marks, not magenta:
+              a box compiles to a coordinate tag and is never painted into the
+              image, so its colour is a UI choice. Brush and arrow below keep
+              `color` because theirs is burned into the pixels. */}
           <Rect
             ref={draftRectRef}
             visible={false}
-            stroke={color}
+            stroke={VECTOR_MARK_COLOR}
+            fill={VECTOR_MARK_FILL}
             strokeWidth={2}
             strokeScaleEnabled={false}
             dash={[6, 4]}
@@ -474,23 +558,42 @@ export default function EditCanvas({
 /**
  * One committed mark.
  *
+ * Every mark is draggable, and a box additionally carries resize handles (the
+ * Transformer is mounted by the parent and attached to whichever box is
+ * selected). Geometry edits go back through `onGeometry` in IMAGE pixels —
+ * Konva hands back stage-space values that are already image-space here,
+ * because the Stage owns the whole transform, but a drag/resize still has to
+ * be clamped to the picture and folded back into the node's own scale.
+ *
  * `strokeScaleEnabled={false}` on the vector outlines keeps their weight in
  * screen pixels, so a box outline stays readable at any zoom. The brush is
  * the deliberate exception: its width is the paint width in image pixels and
  * must scale with the image, or what you drew stops matching what gets sent.
+ *
+ * One consequence of a box having a fill: its interior is a hit target, so a
+ * drag that starts inside an existing box moves that box instead of drawing a
+ * new one. That is the trade the fill buys — grab-anywhere dragging, which is
+ * how every editor behaves — and it is why the fill is worth having beyond
+ * looking better. Start outside the box to draw a new one.
  */
 function AnnotationShape({
   annotation: a,
   selected,
   scale,
+  imgW,
+  imgH,
   onSelect,
+  onGeometry,
 }: {
   annotation: Annotation;
   selected: boolean;
   scale: number;
+  imgW: number;
+  imgH: number;
   onSelect: (id: string) => void;
+  onGeometry: (id: string, geometry: GeometryPatch) => void;
 }) {
-  const stroke = selected ? "#ffffff" : a.color || MARKER_COLOR;
+  const stroke = markColor(a);
   // Typed as the union so the same handler satisfies both onClick (mouse) and
   // onTap (touch); a function accepting a wider parameter is assignable where
   // a narrower one is expected.
@@ -498,9 +601,8 @@ function AnnotationShape({
     e.cancelBubble = true; // don't let the Stage clear the selection
     onSelect(a.id);
   };
-  // Label text is drawn in image space, so counter-scale it to keep a
-  // constant on-screen size.
-  const labelSize = 13 / scale;
+  // A drag must also select, or the handles appear on the wrong mark.
+  const dragStart = () => onSelect(a.id);
 
   if (a.kind === "point") {
     return (
@@ -510,19 +612,31 @@ function AnnotationShape({
           y={a.at.y}
           radius={7 / scale}
           fill={stroke}
-          stroke="#000"
-          strokeWidth={1 / scale}
+          stroke="#0b0b0b"
+          strokeWidth={1.5 / scale}
           hitStrokeWidth={12}
+          draggable
+          onDragStart={dragStart}
+          onDragEnd={(e) => {
+            const p = clampToImage(
+              { x: e.target.x(), y: e.target.y() },
+              imgW,
+              imgH,
+            );
+            onGeometry(a.id, {
+              kind: "point",
+              at: { x: Math.round(p.x), y: Math.round(p.y) },
+            });
+          }}
           onClick={click}
           onTap={click}
         />
-        <Text
-          x={a.at.x + 10 / scale}
-          y={a.at.y - 8 / scale}
+        <MarkLabel
+          x={a.at.x + 11 / scale}
+          y={a.at.y - 9 / scale}
           text={a.label}
-          fontSize={labelSize}
-          fill={stroke}
-          listening={false}
+          color={stroke}
+          scale={scale}
         />
       </>
     );
@@ -532,23 +646,59 @@ function AnnotationShape({
     return (
       <>
         <Rect
-          {...a.rect}
+          // The Transformer finds its target by this id.
+          id={a.id}
+          x={a.rect.x}
+          y={a.rect.y}
           width={a.rect.w}
           height={a.rect.h}
+          fill={VECTOR_MARK_FILL}
           stroke={stroke}
-          strokeWidth={2}
+          strokeWidth={selected ? 2.5 : 1.5}
           strokeScaleEnabled={false}
-          hitStrokeWidth={12}
+          draggable
+          onDragStart={dragStart}
+          onDragEnd={(e) => {
+            const n = e.target;
+            onGeometry(a.id, {
+              kind: "box",
+              rect: clampRect(
+                { x: n.x(), y: n.y(), w: a.rect.w, h: a.rect.h },
+                imgW,
+                imgH,
+              ),
+            });
+          }}
+          onTransformEnd={(e) => {
+            const n = e.target as Konva.Rect;
+            // Konva expresses a resize as a SCALE on the node, not as new
+            // dimensions. Bake it into width/height and reset the scale, or
+            // the next transform compounds on top of it and the stroke width
+            // starts drifting with the box.
+            const rect = clampRect(
+              {
+                x: n.x(),
+                y: n.y(),
+                w: Math.max(1, n.width() * n.scaleX()),
+                h: Math.max(1, n.height() * n.scaleY()),
+              },
+              imgW,
+              imgH,
+            );
+            n.scaleX(1);
+            n.scaleY(1);
+            onGeometry(a.id, { kind: "box", rect });
+          }}
           onClick={click}
           onTap={click}
         />
-        <Text
+        <MarkLabel
           x={a.rect.x}
-          y={a.rect.y - 16 / scale}
+          y={a.rect.y - 6 / scale}
           text={a.label}
-          fontSize={labelSize}
-          fill={stroke}
-          listening={false}
+          color={stroke}
+          scale={scale}
+          above
         />
       </>
     );
@@ -570,6 +720,23 @@ function AnnotationShape({
         // A fixed hit width: a 40px brush is not a 40px click target you
         // want, and wide-stroke hit testing is expensive.
         hitStrokeWidth={12}
+        draggable
+        onDragStart={dragStart}
+        onDragEnd={(e) => {
+          // A dragged Line keeps its points and moves the NODE, so the offset
+          // has to be folded back into the points and the node reset — the
+          // store only knows about points.
+          const n = e.target;
+          const dx = n.x();
+          const dy = n.y();
+          n.position({ x: 0, y: 0 });
+          const moved = a.points.map((v, i) =>
+            i % 2 === 0
+              ? Math.round(Math.min(imgW, Math.max(0, v + dx)))
+              : Math.round(Math.min(imgH, Math.max(0, v + dy))),
+          );
+          onGeometry(a.id, { kind: "brush", points: moved });
+        }}
         onClick={click}
         onTap={click}
       />
@@ -577,17 +744,117 @@ function AnnotationShape({
   }
 
   return (
-    <Arrow
-      points={[a.from.x, a.from.y, a.to.x, a.to.y]}
-      stroke={stroke}
-      fill={stroke}
-      strokeWidth={3}
-      strokeScaleEnabled={false}
-      pointerLength={12}
-      pointerWidth={12}
-      hitStrokeWidth={12}
-      onClick={click}
-      onTap={click}
-    />
+    <>
+      <Arrow
+        points={[a.from.x, a.from.y, a.to.x, a.to.y]}
+        stroke={stroke}
+        fill={stroke}
+        strokeWidth={3}
+        strokeScaleEnabled={false}
+        pointerLength={12}
+        pointerWidth={12}
+        hitStrokeWidth={12}
+        draggable
+        onDragStart={dragStart}
+        onDragEnd={(e) => {
+          const n = e.target;
+          const dx = n.x();
+          const dy = n.y();
+          n.position({ x: 0, y: 0 });
+          onGeometry(a.id, {
+            kind: "arrow",
+            from: roundVec(clampToImage(shift(a.from, dx, dy), imgW, imgH)),
+            to: roundVec(clampToImage(shift(a.to, dx, dy), imgW, imgH)),
+          });
+        }}
+        onClick={click}
+        onTap={click}
+      />
+      {/* Endpoint handles. An arrow means "from here to there", so both ends
+          have to be adjustable — a Transformer would scale it instead, which
+          is not the same operation. */}
+      {selected &&
+        (["from", "to"] as const).map((end) => (
+          <Circle
+            key={end}
+            x={a[end].x}
+            y={a[end].y}
+            radius={5.5 / scale}
+            fill="#ffffff"
+            stroke={stroke}
+            strokeWidth={1.5 / scale}
+            hitStrokeWidth={14}
+            draggable
+            onDragEnd={(e) => {
+              const p = roundVec(
+                clampToImage({ x: e.target.x(), y: e.target.y() }, imgW, imgH),
+              );
+              onGeometry(a.id, {
+                kind: "arrow",
+                from: end === "from" ? p : a.from,
+                to: end === "to" ? p : a.to,
+              });
+            }}
+          />
+        ))}
+    </>
   );
+}
+
+/**
+ * The name tag on a mark — a filled pill, not bare text.
+ *
+ * Counter-scaled so it stays one size on screen: the label is drawn in image
+ * space like everything else, and at 8x zoom bare image-space text is
+ * unreadable. Dark text on the mark colour rather than coloured text on the
+ * photo, which is unreadable over a light subject.
+ */
+function MarkLabel({
+  x,
+  y,
+  text,
+  color,
+  scale,
+  above = false,
+}: {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  scale: number;
+  above?: boolean;
+}) {
+  return (
+    <Label x={x} y={y} listening={false} offsetY={above ? 17 / scale : 0}>
+      <Tag fill={color} cornerRadius={2 / scale} />
+      <Text
+        text={text}
+        fontSize={12 / scale}
+        fontStyle="500"
+        padding={3 / scale}
+        fill="#0b0b0b"
+      />
+    </Label>
+  );
+}
+
+function shift(v: Vec, dx: number, dy: number): Vec {
+  return { x: v.x + dx, y: v.y + dy };
+}
+
+function roundVec(v: Vec): Vec {
+  return { x: Math.round(v.x), y: Math.round(v.y) };
+}
+
+/** Keep a moved or resized box inside the picture, in whole pixels. A mark
+ *  that hangs off the edge normalizes to a coordinate the model cannot use. */
+function clampRect(r: ImageRect, imgW: number, imgH: number): ImageRect {
+  const w = Math.round(Math.min(r.w, imgW));
+  const h = Math.round(Math.min(r.h, imgH));
+  return {
+    x: Math.round(Math.min(Math.max(0, r.x), imgW - w)),
+    y: Math.round(Math.min(Math.max(0, r.y), imgH - h)),
+    w,
+    h,
+  };
 }

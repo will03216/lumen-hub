@@ -16,7 +16,7 @@
  */
 
 import type { Annotation, EditToolKind, Vec } from "./types";
-import { MARKER_COLOR } from "./types";
+import { MARKER_COLOR, VECTOR_MARK_COLOR } from "./types";
 
 /** What a completed canvas gesture produces, before it has an identity. */
 export type DraftAnnotation =
@@ -68,7 +68,14 @@ export function buildAnnotation(
   const base = {
     id: opts.id,
     label: nextLabel(draft.kind, existing),
-    color: opts.color ?? MARKER_COLOR,
+    // Vector marks (point, box) never reach the pixels — they compile to
+    // coordinate tags — so they carry the display colour. Raster marks are
+    // burned in and named in the prose, so they keep the marker colour
+    // whatever the caller passes. See the note on VECTOR_MARK_COLOR.
+    color:
+      draft.kind === "point" || draft.kind === "box"
+        ? VECTOR_MARK_COLOR
+        : (opts.color ?? MARKER_COLOR),
     createdAt: opts.now ?? 0,
   };
 
