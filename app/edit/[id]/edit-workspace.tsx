@@ -19,11 +19,7 @@ import Link from "next/link";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelDropdown } from "@/components/ui/model-dropdown";
-import {
-  IMAGE_MODELS,
-  IMAGE_QUALITIES,
-  type ImageQualityId,
-} from "@/lib/studio/models";
+import { IMAGE_MODELS, IMAGE_QUALITIES } from "@/lib/studio/models";
 import {
   lastWriteError,
   newEditId,
@@ -37,6 +33,7 @@ import { buildEditRequest, useEditRender } from "@/lib/edit/use-edit-render";
 import {
   MARKER_COLOR,
   type Annotation,
+  type EditQualityId,
   type EditSession,
   type EditVersion,
 } from "@/lib/edit/types";
@@ -367,11 +364,16 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             }
           />
 
+          {/* "Source" leads and is the default: an edit should come back the
+              size it went in. The presets are for deliberately going bigger. */}
           <ChipGroup
-            options={IMAGE_QUALITIES.map((q) => ({ id: q.id, label: q.label }))}
+            options={[
+              { id: "source", label: "Source" },
+              ...IMAGE_QUALITIES.map((q) => ({ id: q.id, label: q.label })),
+            ]}
             value={session.qualityId}
             onChange={(id) =>
-              updateEditSession(sessionId, { qualityId: id as ImageQualityId })
+              updateEditSession(sessionId, { qualityId: id as EditQualityId })
             }
           />
 

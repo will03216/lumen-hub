@@ -209,7 +209,9 @@ export function createEditSession(
     instruction: opts.instruction ?? "",
     model: opts.model ?? DEFAULT_IMAGE_MODEL_ID,
     aspectRatio: "source",
-    qualityId: "2k",
+    // "source" not a preset — see EditQualityId. An edit should come
+    // back the size it went in.
+    qualityId: "source",
     versions: [],
     layerSets: [],
     view: { scale: 1, x: 0, y: 0 },

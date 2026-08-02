@@ -106,8 +106,21 @@ export type OpenAIToolDef = {
   };
 };
 
+/**
+ * Tools that are defined but not yet backed by an implementation.
+ *
+ * They stay in EDIT_AGENT_TOOLS — the schema, the planner branch and the
+ * tests are all real and will be needed — but they are withheld from what the
+ * model is shown. Advertising a tool that answers "not available in this
+ * build" spends tokens on every turn describing it, and when the model
+ * reasonably picks it the user gets a dead end instead of an edit.
+ */
+const UNAVAILABLE: ReadonlySet<string> = new Set(["separate_layers"]);
+
 export function toOpenAIToolDefs(
-  tools: readonly AgentToolDef[] = EDIT_AGENT_TOOLS,
+  tools: readonly AgentToolDef[] = EDIT_AGENT_TOOLS.filter(
+    (t) => !UNAVAILABLE.has(t.name),
+  ),
 ): OpenAIToolDef[] {
   return tools.map((t) => ({
     type: "function",

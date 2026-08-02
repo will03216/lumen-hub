@@ -47,13 +47,12 @@
  */
 
 import {
-  DEFAULT_IMAGE_QUALITY_ID,
   clampSizeToModel,
   findImageQuality,
   isSizeAllowed,
   modelMaxPixels,
-  type ImageQualityId,
 } from "@/lib/studio/models";
+import type { EditQualityId } from "./types";
 
 /** Engines want even dimensions; 8 is the common denominator across the
  *  Seedream family and leaves room for chroma subsampling. */
@@ -83,14 +82,15 @@ export type SizeForEditOpts = {
    *  "W:H" overrides it. "auto" is treated as "source" — see the docblock on
    *  why this function never emits "adaptive". */
   aspectRatio?: string;
-  qualityId?: ImageQualityId;
+  /** "source" (the editor's default) keeps the source's own long side, so an
+   *  edit returns an image the same size it went in. The named presets are
+   *  for deliberately rendering bigger. */
+  qualityId?: EditQualityId;
 };
 
 export function sizeForEdit(opts: SizeForEditOpts): string {
   const cap = modelMaxPixels(opts.modelId) ?? FALLBACK_MAX_PIXELS;
-  const longSide =
-    findImageQuality(opts.qualityId ?? DEFAULT_IMAGE_QUALITY_ID)?.longSide ??
-    2048;
+  const longSide = resolveLongSide(opts);
 
   const ratio = resolveRatio(opts);
 
@@ -121,7 +121,20 @@ export function sizeForEdit(opts: SizeForEditOpts): string {
     }
   }
 
-  const size = `${floorTo(w)}x${floorTo(h)}`;
+  // Floor both sides, then repair the aspect.
+  //
+  // Flooring each side independently distorts the ratio, and the distortion
+  // is proportionally worst when the short side is small: 8000x500 floors to
+  // 8000x496, which is 16.13:1 — past the engine's 16:1 limit, so the request
+  // is rejected. Pulling the LONG side down to match the floored short side
+  // fixes it, and can only reduce the pixel count, so it cannot re-cross the
+  // ceiling we just scaled under.
+  let fw = floorTo(w);
+  let fh = floorTo(h);
+  if (fw / fh > MAX_ASPECT) fw = floorTo(fh * MAX_ASPECT);
+  else if (fh / fw > MAX_ASPECT) fh = floorTo(fw * MAX_ASPECT);
+
+  const size = `${fw}x${fh}`;
 
   // Belt-and-braces. If some future ceiling makes the arithmetic above
   // insufficient, fall back to a known-legal preset rather than shipping a
@@ -129,6 +142,29 @@ export function sizeForEdit(opts: SizeForEditOpts): string {
   return isSizeAllowed(size, opts.modelId)
     ? size
     : clampSizeToModel(size, opts.modelId);
+}
+
+/**
+ * The long side to lay out, in pixels.
+ *
+ * "source" returns the source image's own long side, which is what makes an
+ * edit round-trip at its input size. A quality preset ignores the source
+ * entirely — that is the point of a preset, and also why it must not be the
+ * default: it silently upscales every edit to the same number regardless of
+ * what came in, resampling the whole image on every iteration.
+ *
+ * The ceiling still applies afterwards, so a 6000px source is scaled down to
+ * something the model will actually render.
+ */
+function resolveLongSide(opts: SizeForEditOpts): number {
+  const quality = opts.qualityId ?? "source";
+  if (quality === "source") {
+    const long = Math.max(opts.width, opts.height);
+    // An unmeasured ref would give 0 or NaN here; fall back to the smallest
+    // preset rather than emitting a degenerate size.
+    return Number.isFinite(long) && long > 0 ? long : 2048;
+  }
+  return findImageQuality(quality)?.longSide ?? 2048;
 }
 
 /**

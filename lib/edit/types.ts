@@ -21,6 +21,21 @@
 
 import type { ImageQualityId } from "@/lib/studio/models";
 
+/**
+ * Output size for an edit.
+ *
+ * "source" is the default and is not one of the generator's quality presets,
+ * deliberately. A preset puts its long side on the longer axis regardless of
+ * what came in, so a 1364px upload rendered at "2k" comes back 2144px — a
+ * 1.6x upscale nobody asked for, on every iteration. Beyond cost and latency
+ * that resamples the WHOLE image, so regions the user never marked take
+ * generation loss each round trip.
+ *
+ * For an edit the intuitive contract is "same size out as in". The presets
+ * stay available for the case where someone genuinely wants a bigger render.
+ */
+export type EditQualityId = ImageQualityId | "source";
+
 // ─────────────────────────── Geometry ─────────────────────────────────────
 
 export type Vec = { x: number; y: number };
@@ -218,7 +233,7 @@ export type EditSession = EditSessionMeta & {
    *  edit, and deliberately not Seedream's own "adaptive" auto-sizer, which
    *  means something different. */
   aspectRatio: string;
-  qualityId: ImageQualityId;
+  qualityId: EditQualityId;
   seed?: number;
   versions: EditVersion[];
   layerSets: LayerSet[];

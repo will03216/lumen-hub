@@ -71,6 +71,59 @@ describe("shape of the output", () => {
   });
 });
 
+describe("source sizing — the editor default", () => {
+  it("returns the source's own size, not a preset", () => {
+    // The regression this exists to prevent, from a real session: a
+    // 1364x1364 upload came back 2144x2144 because the default was the "2k"
+    // preset. Nobody asked for a 1.6x upscale, and it resamples the whole
+    // image on every iteration — including regions never marked.
+    expect(
+      sizeForEdit({ width: 1364, height: 1364, modelId: PRO }),
+    ).toBe("1360x1360"); // 1364 floored to a multiple of 8
+  });
+
+  it("is the default when qualityId is omitted", () => {
+    const implicit = sizeForEdit({ width: 900, height: 600, modelId: PRO });
+    const explicit = sizeForEdit({
+      width: 900,
+      height: 600,
+      modelId: PRO,
+      qualityId: "source",
+    });
+    expect(implicit).toBe(explicit);
+  });
+
+  it("does not upscale a small source", () => {
+    const { w, h } = dims(
+      sizeForEdit({ width: 800, height: 600, modelId: PRO }),
+    );
+    expect(w).toBeLessThanOrEqual(800);
+    expect(h).toBeLessThanOrEqual(600);
+  });
+
+  it("still clamps a source above the model ceiling", () => {
+    // 6000x4000 = 24 MP, far above 5.0 Pro's 4,624,220.
+    const size = sizeForEdit({ width: 6000, height: 4000, modelId: PRO });
+    expect(isSizeAllowed(size, PRO)).toBe(true);
+    expect(sizePixels(size)!).toBeLessThanOrEqual(DEFAULT_MODEL_MAX_PIXELS);
+  });
+
+  it("still honours an explicit preset when one is asked for", () => {
+    // Opting in to a bigger render is a legitimate choice; it just isn't the
+    // default any more.
+    const { w } = dims(
+      sizeForEdit({ width: 800, height: 800, modelId: PRO, qualityId: "2k" }),
+    );
+    expect(w).toBeGreaterThan(800);
+  });
+
+  it("falls back to a preset for an unmeasured ref", () => {
+    const size = sizeForEdit({ width: 0, height: 0, modelId: PRO });
+    expect(size).toMatch(/^\d+x\d+$/);
+    expect(isSizeAllowed(size, PRO)).toBe(true);
+  });
+});
+
 describe("the ceiling", () => {
   it("keeps 16:9 at 2K under the 5.0 Pro cap — the case pickImageSize fails", () => {
     // pickImageSize(16:9, "2k") === "3072x1728" === 5,308,416 px, which the
@@ -166,6 +219,25 @@ describe("aspect override", () => {
       sizeForEdit({ width: 8000, height: 100, modelId: PRO }), // 80:1
     );
     expect(w / h).toBeLessThanOrEqual(16.001);
+  });
+
+  it("keeps the ratio inside 16:1 AFTER flooring, not just before", () => {
+    // Flooring each side independently distorts the aspect, worst when the
+    // short side is small: 8000x500 floors to 8000x496 = 16.13:1, which the
+    // engine rejects. The bound has to hold on the emitted numbers.
+    for (const [w0, h0] of [
+      [8000, 100],
+      [8000, 500],
+      [100, 8000],
+      [4000, 250],
+      [317, 5081],
+    ] as Array<[number, number]>) {
+      const { w, h } = dims(sizeForEdit({ width: w0, height: h0, modelId: PRO }));
+      const ratio = Math.max(w / h, h / w);
+      expect(ratio).toBeLessThanOrEqual(16.0000001);
+      expect(w % 8).toBe(0);
+      expect(h % 8).toBe(0);
+    }
   });
 });
 

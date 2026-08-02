@@ -38,6 +38,7 @@ import {
 import { buildAnnotation } from "./annotations";
 import { renderComposite } from "./composite";
 import { resolveSafeUrl } from "./same-origin";
+import { measureImage } from "./start-session";
 import {
   addRef,
   getEditSession,
@@ -58,6 +59,39 @@ const VISION_LONG_EDGE = 2576;
 
 /** Stop runaway loops. Each iteration is a paid model call. */
 const MAX_TURNS = 12;
+
+/**
+ * How much to shrink an image so its long edge fits the vision tier.
+ *
+ * Derived from the LONG EDGE, not the pixel count: a 4000x1000 image is only
+ * 4 MP, so a pixel-count cap alone would happily leave its long edge at 4000
+ * and blow the tier. Every coordinate the model returned would then be scaled
+ * against a factor we never applied.
+ */
+function visionScale(w: number, h: number): number {
+  return Math.min(1, VISION_LONG_EDGE / (Math.max(w, h) || 1));
+}
+
+/** Re-encode an image at vision scale. Clean — no markup burned in. */
+async function toVisionImage(
+  url: string,
+  width: number,
+  height: number,
+): Promise<string> {
+  const safe = resolveSafeUrl(url);
+  const s = visionScale(width, height);
+  const { dataUrl } = await renderComposite({
+    url: safe.url,
+    crossOrigin: safe.crossOrigin,
+    width,
+    height,
+    annotations: [], // marks travel as data, see the docblock
+    maxPixels: width * height * s * s,
+    mimeType: "image/jpeg",
+    quality: 0.85,
+  });
+  return dataUrl;
+}
 
 // ─────────────────────────── Transcript ───────────────────────────────────
 
@@ -87,6 +121,16 @@ type PendingApproval = {
   plan: ToolPlan;
   summary: string;
 };
+
+/**
+ * The result of running one tool.
+ *
+ * `image` exists so a tool can hand back something to LOOK at rather than
+ * only something to read. It is delivered as a separate user turn after the
+ * tool results, because the tool-result slot is text-only on this wire
+ * format — there is nowhere in it to put a picture.
+ */
+type ToolOutcome = { text: string; image?: string };
 
 /** What the route hands back for one turn. */
 type AgentTurn = {
@@ -128,39 +172,39 @@ export function useEditAgent(
     const session = getEditSession(sessionId);
     const ref = session?.refs[0];
     if (!session || !ref) return null;
-
-    const longEdge = Math.max(ref.width, ref.height);
-    const scale = Math.min(1, VISION_LONG_EDGE / (longEdge || 1));
-    const safe = resolveSafeUrl(ref.safeUrl ?? ref.url);
-    const { dataUrl } = await renderComposite({
-      url: safe.url,
-      crossOrigin: safe.crossOrigin,
-      width: ref.width,
-      height: ref.height,
-      annotations: [], // clean — marks go over as data, see the docblock
-      maxPixels: ref.width * ref.height * scale * scale,
-      mimeType: "image/jpeg",
-      quality: 0.85,
-    });
-    return { dataUrl, scale, session };
+    const dataUrl = await toVisionImage(
+      ref.safeUrl ?? ref.url,
+      ref.width,
+      ref.height,
+    );
+    return { dataUrl, scale: visionScale(ref.width, ref.height), session };
   }, [sessionId]);
+
+  /**
+   * Same downscale, for an image whose dimensions we don't already hold —
+   * a render output, which comes back as a bare URL.
+   */
+  const downscaleForVision = React.useCallback(async (url: string) => {
+    const { width, height } = await measureImage(resolveSafeUrl(url).url);
+    return toVisionImage(url, width, height);
+  }, []);
 
   /** Apply one planned tool call. Returns the text handed back to the model. */
   const apply = React.useCallback(
-    async (plan: ToolPlan, scale: number): Promise<string> => {
+    async (plan: ToolPlan, scale: number): Promise<ToolOutcome> => {
       const session = getEditSession(sessionId);
-      if (!session) return "The session no longer exists.";
+      if (!session) return { text: "The session no longer exists." };
 
       switch (plan.kind) {
         case "inspect":
-          return JSON.stringify(describeSession(session, scale));
+          return { text: JSON.stringify(describeSession(session, scale)) };
 
         case "preview_prompt":
-          return buildEditRequest(session).prompt || "(empty)";
+          return { text: buildEditRequest(session).prompt || "(empty)" };
 
         case "annotation.add": {
           const ref = session.refs.find((r) => r.id === plan.refId);
-          if (!ref) return `No reference ${plan.refId}.`;
+          if (!ref) return { text: `No reference ${plan.refId}.` };
           const ann = buildAnnotation(plan.draft, ref.annotations, {
             id: newEditId(),
             now: Date.now(),
@@ -169,19 +213,21 @@ export function useEditAgent(
           // Same cap a human hits, reported the same way — the agent must not
           // be able to route around a limit the UI enforces.
           if (!upsertAnnotation(sessionId, plan.refId, ann)) {
-            return `That reference is already at the maximum number of marks. Remove one before adding another.`;
+            return {
+              text: `That reference is already at the maximum number of marks. Remove one before adding another.`,
+            };
           }
-          return `Added ${ann.label}.`;
+          return { text: `Added ${ann.label}.` };
         }
 
         case "annotation.remove": {
           for (const id of plan.ids) removeAnnotation(sessionId, plan.refId, id);
-          return `Removed ${plan.ids.length} mark(s).`;
+          return { text: `Removed ${plan.ids.length} mark(s).` };
         }
 
         case "session.patch":
           updateEditSession(sessionId, plan.patch);
-          return "Instruction updated.";
+          return { text: "Instruction updated." };
 
         case "reference.add": {
           // Measured lazily by the canvas; 0x0 would break sizing, so refuse
@@ -192,33 +238,59 @@ export function useEditAgent(
             height: 0,
             role: plan.role,
           });
-          return created
-            ? `Added reference ${created.id}. It will be measured when it loads.`
-            : "Could not add that reference.";
+          return {
+            text: created
+              ? `Added reference ${created.id}. It will be measured when it loads.`
+              : "Could not add that reference.",
+          };
         }
 
         case "restore_version": {
           const v = session.versions.find((x) => x.id === plan.versionId);
-          if (!v) return `No version ${plan.versionId}.`;
+          if (!v) return { text: `No version ${plan.versionId}.` };
           updateEditSession(sessionId, { instruction: v.instruction });
-          return `Restored the instruction from that version.`;
+          return { text: `Restored the instruction from that version.` };
         }
 
         case "render": {
           await onRenderRef.current();
           const after = getEditSession(sessionId);
           const last = after?.versions.at(-1);
-          if (last?.status === "done" && last.outputs[0]?.url) {
-            return "Render finished. The result is on screen.";
+          const url = last?.outputs[0]?.url;
+          if (last?.status !== "done" || !url) {
+            return { text: `Render failed: ${last?.error ?? "unknown error"}.` };
           }
-          return `Render failed: ${last?.error ?? "unknown error"}.`;
+
+          // Hand the RESULT back as an image, not just as a sentence.
+          //
+          // Without this the agent is write-only: it can act but never see
+          // what it produced, so it cannot say "the cap changed but its
+          // reflection didn't" or decide whether another pass is warranted.
+          // That judgement is half the reason to have an agent at all.
+          //
+          // A failure to fetch it is not a failed render — the image exists
+          // and is on screen. Degrade to the text-only answer rather than
+          // telling the model something went wrong.
+          try {
+            const shot = await downscaleForVision(url);
+            return {
+              text: "Render finished. The result is attached — check it against what was asked.",
+              image: shot,
+            };
+          } catch {
+            return {
+              text: "Render finished and is on screen, but I could not attach it for you to inspect.",
+            };
+          }
         }
 
         case "separate_layers":
-          return "Layer separation isn't available yet in this build.";
+          return { text: "Layer separation isn't available yet in this build." };
 
         case "ask_user":
-          return "Asked the user; their reply will arrive as the next message.";
+          return {
+            text: "Asked the user; their reply will arrive as the next message.",
+          };
       }
     },
     [sessionId],
@@ -267,6 +339,8 @@ export function useEditAgent(
         if (!session) return;
 
         const results: ChatMessage[] = [];
+        /** Images a tool produced for the model to look at. */
+        const followUpImages: string[] = [];
 
         for (const call of calls) {
           const name = call.function.name;
@@ -327,7 +401,9 @@ export function useEditAgent(
           }
 
           try {
-            const text = await apply(planned.plan, scale);
+            const outcome = await apply(planned.plan, scale);
+            const text = outcome.text;
+            if (outcome.image) followUpImages.push(outcome.image);
             setEntries((prev) =>
               prev.map((e) =>
                 e.kind === "tool" && e.status === "awaiting"
@@ -351,6 +427,30 @@ export function useEditAgent(
         // are NOT batched into a single user turn, and every tool_call_id in
         // the assistant turn must be answered or the next request is rejected.
         wireRef.current = [...wireRef.current, ...results];
+
+        // Anything a tool produced to LOOK at goes in as its own user turn,
+        // after the results. It cannot ride inside a tool result — that slot
+        // is text-only on this wire format — and it must come after them,
+        // because every tool_call_id has to be answered before the next turn
+        // is valid.
+        if (followUpImages.length > 0) {
+          wireRef.current = [
+            ...wireRef.current,
+            {
+              role: "user",
+              content: [
+                ...followUpImages.map((url) => ({
+                  type: "image_url" as const,
+                  image_url: { url },
+                })),
+                {
+                  type: "text" as const,
+                  text: "This is the render that just completed. Compare it against what was asked and say plainly whether it worked. If something is off, say what and propose the smallest fix — do not start another render without being asked.",
+                },
+              ],
+            },
+          ];
+        }
       }
 
       push({
