@@ -30,7 +30,10 @@ export function AgentPanel({
 }: {
   sessionId: string;
   onRender: () => Promise<void>;
-  onSeparateLayers?: (maxLayers: number) => Promise<void>;
+  onSeparateLayers?: (
+    maxLayers: number,
+    opts: { refId?: string; mode?: "auto" | "region" },
+  ) => Promise<{ ok: boolean; message: string }>;
 }) {
   const { entries, send, busy, pending, resolveApproval, needsKey } =
     useEditAgent(sessionId, { onRender, onSeparateLayers });

@@ -29,6 +29,7 @@
 
 import * as React from "react";
 import type { ChatMessage, ChatToolCall } from "@/lib/byteplus";
+import { MAX_REF_IMAGES } from "@/lib/studio/models";
 import {
   describeSession,
   planToolCall,
@@ -51,9 +52,13 @@ import { buildEditRequest } from "./use-edit-render";
 import { MARKER_COLOR } from "./types";
 
 /**
- * Claude's high-resolution vision tier tops out at 2576px on the long edge.
- * Beyond it the image is downscaled server-side anyway, and we would have
- * base64'd the extra pixels for nothing.
+ * Long-edge budget for the snapshot we show the model.
+ *
+ * 2576px is the high-resolution vision tier boundary of the frontier models
+ * this was first prototyped against, and it remains a sensible ceiling for
+ * seed-2-0-pro: past it a vision encoder downscales anyway, and we would have
+ * base64'd the extra pixels through our own request for nothing. Lower it and
+ * fine marks get mushy; raise it and every turn costs more for no gain.
  */
 const VISION_LONG_EDGE = 2576;
 
@@ -145,8 +150,15 @@ export function useEditAgent(
   opts: {
     onRender: () => Promise<void>;
     /** Undefined when §5B is switched off — the tool then reports that
-     *  honestly rather than appearing to work. */
-    onSeparateLayers?: (maxLayers: number) => Promise<void>;
+     *  honestly rather than appearing to work.
+     *
+     *  Returns the outcome. It used to return void, which meant the agent was
+     *  told "separation finished, the layers are in the panel" even when the
+     *  call 402'd or separated nothing — and it relayed that to the user. */
+    onSeparateLayers?: (
+      maxLayers: number,
+      opts: { refId?: string; mode?: "auto" | "region" },
+    ) => Promise<{ ok: boolean; message: string }>;
   },
 ) {
   const [entries, setEntries] = React.useState<ChatEntry[]>([]);
@@ -237,17 +249,48 @@ export function useEditAgent(
           return { text: "Instruction updated." };
 
         case "reference.add": {
-          // Measured lazily by the canvas; 0x0 would break sizing, so refuse
-          // rather than store an unmeasured ref.
+          // The same ceiling the references panel enforces. It lived only in
+          // the UI, so the agent could walk straight past it and build a
+          // request the model rejects.
+          if (session.refs.length >= MAX_REF_IMAGES) {
+            return {
+              text: `This session already has the maximum of ${MAX_REF_IMAGES} references. Remove one before adding another.`,
+            };
+          }
+
+          // Measure BEFORE storing. Nothing measures a ref after the fact, so
+          // a 0x0 ref stays 0x0 — and width/height feed sizeForEdit and every
+          // coordinate normalisation, so it would silently corrupt the whole
+          // request rather than fail loudly.
+          let width: number;
+          let height: number;
+          try {
+            const safe = resolveSafeUrl(plan.url);
+            ({ width, height } = await measureImage(safe.url));
+          } catch {
+            return {
+              text: `Could not load ${plan.url} to measure it, so it was not added. The URL may be unreachable or blocked.`,
+            };
+          }
+
+          // Re-check after the measure: it can take seconds, and `addRef`
+          // itself has no cap, so a reference added by hand in the meantime
+          // would otherwise push the session one over.
+          if ((getEditSession(sessionId)?.refs.length ?? 0) >= MAX_REF_IMAGES) {
+            return {
+              text: `This session reached the maximum of ${MAX_REF_IMAGES} references while that image was loading, so it was not added.`,
+            };
+          }
+
           const created = addRef(sessionId, {
             url: plan.url,
-            width: 0,
-            height: 0,
+            width,
+            height,
             role: plan.role,
           });
           return {
             text: created
-              ? `Added reference ${created.id}. It will be measured when it loads.`
+              ? `Added reference ${created.id} (${width}x${height}, role ${plan.role}).`
               : "Could not add that reference.",
           };
         }
@@ -298,12 +341,14 @@ export function useEditAgent(
               text: "Layer separation is switched off in this build. Tell the user rather than retrying.",
             };
           }
-          await run(plan.maxLayers ?? 10);
-          // The panel owns the result; the agent gets told it happened so it
-          // can talk about it, not a payload it would only have to summarise.
-          return {
-            text: "Layer separation finished. The layers are listed in the Layers panel with their names and stacking order.",
-          };
+          // refId and mode were parsed, validated, and then thrown away here:
+          // every call ran auto mode on refs[0] whatever the model asked for,
+          // so region mode was unreachable through the agent.
+          const outcome = await run(plan.maxLayers ?? 10, {
+            refId: plan.refId,
+            mode: plan.mode,
+          });
+          return { text: outcome.message };
         }
 
         case "ask_user":
@@ -442,9 +487,10 @@ export function useEditAgent(
         }
 
         // One `role: "tool"` message per call, in call order. This is the
-        // OpenAI-compatible shape BytePlus speaks — unlike Anthropic, results
-        // are NOT batched into a single user turn, and every tool_call_id in
-        // the assistant turn must be answered or the next request is rejected.
+        // OpenAI-compatible shape BytePlus speaks: results are NOT batched
+        // into a single user turn the way the Anthropic wire format wants
+        // them, and every tool_call_id in the assistant turn must be answered
+        // or the next request is rejected.
         wireRef.current = [...wireRef.current, ...results];
 
         // Anything a tool produced to LOOK at goes in as its own user turn,

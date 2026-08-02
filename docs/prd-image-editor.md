@@ -91,6 +91,8 @@ The viewer — modelled on `seed-demo.bytedance.net/layer-viewer` — allows dra
 
 Two spec behaviours shape the UI: editing a transparent layer triggers an automatic re-split so output **retains alpha**; and the feature is **flagged upstream and documented as non-final**, so it ships behind `NEXT_PUBLIC_EDIT_LAYERS` and degrades gracefully when a BYOK key lacks access.
 
+> **Shipped status (2026-08-02) — a layer *list*, not the viewer above.** What is built: auto and boxed-region separation, every layer with thumbnail, name, description and stacking order, visibility toggle, re-run with different settings, agent-drivable via `separate_layers`. What is **not** built: drag-to-reposition, corner-scale, z-reorder, per-layer re-edit through the 5A path, and export of the recomposition — those need a second Konva stage with a Transformer over the layer set, and are the remaining work for **G2**. G2 is therefore *partially* met: every capability area is reachable, but §5B's manipulation surface is not.
+
 ### 5C. Multi-image fusion + sketch-to-image
 
 Up to 10 references with per-reference **roles** — `base`, `subject`, `style`, `sketch` — where the role generates the prose telling the model how to use each one. Technically the cheapest area: `ImageGenParams.image` is already `string | string[]`.

@@ -38,7 +38,12 @@ import {
   patchVersion,
 } from "./sessions";
 import { sizeForEdit } from "./size";
-import type { EditReference, EditSession, EditVersion } from "./types";
+import type {
+  Annotation,
+  EditReference,
+  EditSession,
+  EditVersion,
+} from "./types";
 
 /**
  * Ceiling for what we send *in*. There is no point feeding the model more
@@ -156,32 +161,67 @@ export async function resolveWireImages(
   const cap = maxInputPixels(req.model);
 
   const images = await Promise.all(
-    req.orderedRefs.map(async (ref) => {
+    req.orderedRefs.map((ref) => {
       const plan = req.plans.find((p) => p.refId === ref.id);
-      const needsComposite = plan?.transport === "composite";
-      const isRemote = /^https?:/i.test(ref.url);
-
-      if (!needsComposite && isRemote) return ref.url;
-
-      const safe = resolveSafeUrl(ref.safeUrl ?? ref.url);
-      const { dataUrl } = await renderComposite({
-        url: safe.url,
-        crossOrigin: safe.crossOrigin,
-        width: ref.width,
-        height: ref.height,
-        // Passing an empty list still gets us the downscale-and-inline pass,
-        // which is exactly what a local clean image needs.
-        annotations: needsComposite ? ref.annotations : [],
+      return toWireImage(ref, {
         maxPixels: cap,
-        mimeType: encodingFor(ref.url),
+        annotations: plan?.transport === "composite" ? ref.annotations : [],
       });
-      return dataUrl;
     }),
   );
 
   if (images.length === 0) return undefined;
   return images.length === 1 ? images[0] : images;
 }
+
+/**
+ * One reference → something BytePlus can actually consume.
+ *
+ * Exported because EVERY caller that sends an image upstream needs this, and
+ * the one that reimplemented it got it wrong: layer separation posted
+ * `/library-cache/upload-x.png` straight through, which is same-origin to us
+ * and unreachable from BytePlus's servers, so the call failed every time on
+ * the two commonest entry paths. Anything that builds an upstream request
+ * should call this rather than reading `ref.url`.
+ *
+ * Remote https URLs pass through untouched — letting the model fetch them
+ * directly avoids base64-ing megabytes through our own request. Everything
+ * else is inlined as a data URI, downscaled to the model's own pixel ceiling,
+ * with `annotations` burned in when the caller wants markup visible.
+ */
+export async function toWireImage(
+  ref: EditReference,
+  opts: {
+    maxPixels: number;
+    /** Marks to draw into the pixels. Empty still gets the
+     *  downscale-and-inline pass, which is what a local image needs. */
+    annotations?: Annotation[];
+    /** Draw box marks as red rectangles — the convention layer separation's
+     *  "separate the element inside the red box" prompt depends on. */
+    drawBoxes?: boolean;
+  },
+): Promise<string> {
+  const annotations = opts.annotations ?? [];
+  const isRemote = /^https?:/i.test(ref.url);
+  if (isRemote && annotations.length === 0 && !opts.drawBoxes) return ref.url;
+
+  const safe = resolveSafeUrl(ref.safeUrl ?? ref.url);
+  const { dataUrl } = await renderComposite({
+    url: safe.url,
+    crossOrigin: safe.crossOrigin,
+    width: ref.width,
+    height: ref.height,
+    annotations,
+    drawBoxes: opts.drawBoxes,
+    maxPixels: opts.maxPixels,
+    mimeType: encodingFor(ref.url),
+  });
+  return dataUrl;
+}
+
+/** The input ceiling for a model, exported for callers building their own
+ *  requests (layer separation). */
+export { maxInputPixels };
 
 // ─────────────────────────── Hook ─────────────────────────────────────────
 

@@ -51,11 +51,20 @@ export function PresetStrip({
   onApply,
   hasMark,
 }: {
-  /** Called with the instruction text; the parent writes it to the store. */
-  onApply: (instruction: string, presetId: string) => void;
+  /** Called with the instruction text; the parent writes it to the store.
+   *  Instruction only — the preset id was in this signature and no caller
+   *  ever read it. */
+  onApply: (instruction: string) => void;
   hasMark: boolean;
 }): React.JSX.Element {
-  const [group, setGroup] = React.useState<EditPreset["group"]>("task");
+  // Opening tab depends on the canvas, because every preset in the Task
+  // group needs a mark: on a fresh session it opened onto a wall of disabled
+  // buttons, which reads as a broken feature rather than a precondition.
+  // Lazy initial state on purpose — this picks the FIRST tab, it does not
+  // yank the tab away once someone has chosen one.
+  const [group, setGroup] = React.useState<EditPreset["group"]>(() =>
+    hasMark ? "task" : "colour",
+  );
   const presets = React.useMemo(() => presetsByGroup(group), [group]);
 
   // Only surfaced when it's actionable. A standing "place a mark" nag on the
@@ -100,7 +109,7 @@ export function PresetStrip({
               key={p.id}
               type="button"
               disabled={locked}
-              onClick={() => onApply(p.instruction(), p.id)}
+              onClick={() => onApply(p.instruction())}
               title={locked ? `${p.hint} — ${NEEDS_MARK_REASON}` : p.hint}
               className={cn(
                 "flex shrink-0 items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-left transition-colors",

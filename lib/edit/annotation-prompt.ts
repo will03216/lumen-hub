@@ -119,6 +119,10 @@ const MIN_BOX_SPAN = 4;
 const DEFAULT_MAX_WORDS = 600;
 const DEFAULT_MAX_TARGETS = 20;
 
+/** Roles whose sentence describes the image on its own terms, with no
+ *  reference to the anchor — so they are safe to emit for the anchor itself. */
+const SELF_CONTAINED_ROLES = new Set<CompileRef["role"]>(["style", "sketch"]);
+
 /**
  * How to use each non-base reference.
  *
@@ -130,11 +134,23 @@ const DEFAULT_MAX_TARGETS = 20;
  * for perspective and lighting rather than averaging across the set.
  */
 function roleBlock(refs: readonly CompileRef[]): string | null {
-  const base = refs.find((r) => r.role === "base");
-  const others = refs.filter((r) => r.role !== "base");
+  // With no explicit base, the first reference in wire order IS the base —
+  // Seedream treats image[0] as the subject. Saying "the first reference"
+  // instead let a line tell the model to match reference image 1 against
+  // itself, which is at best noise and at worst a contradiction.
+  const anchorRef = refs.find((r) => r.role === "base") ?? refs[0];
+  const others = refs.filter(
+    (r) =>
+      r.role !== "base" &&
+      // The anchor keeps its own line unless that line would point back at
+      // the anchor. `style` and `sketch` describe the image on its own terms,
+      // so they stay; `subject` and anything falling to the generic line name
+      // the anchor and would be circular.
+      !(r === anchorRef && !SELF_CONTAINED_ROLES.has(r.role)),
+  );
   if (others.length === 0) return null;
 
-  const anchor = base ? `reference image ${base.index}` : "the first reference";
+  const anchor = `reference image ${anchorRef?.index ?? 1}`;
   const lines = others.map((r) => {
     switch (r.role) {
       case "subject":

@@ -1,7 +1,8 @@
 /**
  * The agent's tool surface — definitions, and the pure reading of one call.
  *
- * PRD §8.2. Claude Opus 5 drives the editor by calling tools; this module owns
+ * PRD §8.2. The agent — seed-2-0-pro, via /api/edit/agent — drives the editor
+ * by calling tools; this module owns
  * the two halves of that contract that have no side effects: the JSON-Schema
  * definitions sent to the API, and the mapping from a tool call's arguments to
  * a `ToolPlan` describing what should change. Nothing here does I/O, touches
@@ -16,9 +17,9 @@
  *
  * THREE RULES THIS FILE EXISTS TO ENFORCE.
  *
- * 1. THE COORDINATE RESCALE. Opus 5 returns coordinates that map 1:1 to the
+ * 1. THE COORDINATE RESCALE. The model returns coordinates that map 1:1 to the
  *    pixels of the image it was *shown*, and the harness downscales the canvas
- *    snapshot to fit the model's 2576px long-edge vision tier. So every incoming
+ *    snapshot to fit a 2576px long-edge vision budget. So every incoming
  *    coordinate is in snapshot space and must be divided by `scale` before it
  *    reaches the store, which holds image-intrinsic pixels (see the geometry
  *    invariant at the top of types.ts). Miss this and every agent mark is
@@ -41,9 +42,9 @@
  *    array re-bills the image at 1× on every turn of every conversation. Append
  *    only; the test asserts the exact sequence.
  *
- * No Anthropic SDK import, deliberately: this module is pulled into the client
- * bundle by the loop, and the SDK is server-only. `AgentToolDef` is structural
- * and assignable to the SDK's `Tool` where the route needs it.
+ * No provider SDK import, deliberately: this module is pulled into the client
+ * bundle by the loop, so everything here is structural and provider-neutral.
+ * `toOpenAIToolDefs` does the one conversion the wire needs.
  *
  * Tool *descriptions* are load-bearing product surface, not documentation. They
  * are the only thing that makes the model choose `place_box` over `place_arrow`,
@@ -68,8 +69,9 @@ import {
 
 // ─────────────────────────── Tool definitions ─────────────────────────────
 
-/** Anthropic tool definition shape. Kept structural — do NOT import the
- *  Anthropic SDK here; this module must stay usable on the client. */
+/** A flat tool definition — name, description, schema. Deliberately not any
+ *  vendor's type: this module must stay importable on the client, and the one
+ *  wire shape that matters is produced by `toOpenAIToolDefs` below. */
 export type AgentToolDef = {
   name: string;
   description: string;
@@ -83,8 +85,8 @@ export type AgentToolDef = {
 /**
  * The same tools in the OpenAI-compatible shape BytePlus expects.
  *
- * The definitions above are stored in the Anthropic shape because it is the
- * flatter of the two and reads better in source. The agent actually runs on
+ * The definitions above are stored flat because that reads better in source.
+ * The agent actually runs on
  * seed-2-0-pro via /chat/completions, which nests everything under
  * `function` and calls the schema `parameters` instead of `input_schema`.
  *

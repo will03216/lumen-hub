@@ -344,7 +344,17 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             <LayersPanel
               reference={activeRef}
               state={layers.state}
-              onSeparate={layers.separate}
+              // Passes the ref explicitly rather than letting the hook
+              // default to refs[0]. Today `activeRef` IS refs[0], so this
+              // changes nothing — but the hook is also driven by the agent,
+              // which can target any reference, and an implicit default is
+              // how those two callers would quietly disagree.
+              onSeparate={(maxLayers, mode) => {
+                void layers.separate(maxLayers, {
+                  refId: activeRef?.id,
+                  mode,
+                });
+              }}
               onToggle={layers.toggle}
             />
           )}
@@ -384,7 +394,11 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             ARE the demo: an empty canvas is where a demo dies in the first
             thirty seconds. */}
         <PresetStrip
-          hasMark={annotations.length > 0}
+          // Hidden marks don't count: the compiler drops them, so a canvas
+          // whose only mark is hidden sends no coordinates at all — and a
+          // "remove the marked object" preset would then be a confident,
+          // unscoped edit.
+          hasMark={annotations.some((a) => !a.hidden)}
           onApply={(instruction) => {
             // Straight through the buffered field so the textarea updates
             // immediately, then flushed so Render doesn't read stale text

@@ -30,8 +30,14 @@ import {
   DEFAULT_ARROW_HEAD_ANGLE,
   DEFAULT_ARROW_HEAD_LENGTH,
   arrowHeadPoints,
+  normalizeRect,
 } from "./geometry";
-import type { Annotation, ArrowAnnotation, BrushAnnotation } from "./types";
+import type {
+  Annotation,
+  ArrowAnnotation,
+  BoxAnnotation,
+  BrushAnnotation,
+} from "./types";
 
 export type CompositeOpts = {
   /** A canvas-safe URL — see lib/edit/same-origin.ts. Passing a raw
@@ -47,6 +53,16 @@ export type CompositeOpts = {
   /** Downscale so the encoded result stays under the model's input ceiling.
    *  A 6000×4000 composite base64s to well over 10 MB. */
   maxPixels?: number;
+  /**
+   * Also draw BOX annotations, as red outlines.
+   *
+   * Off by default because boxes normally travel as `<bbox>` coordinate tags
+   * with the image left clean — burning them in as well would show the model
+   * markup it is also being given numerically. Layer separation's region mode
+   * is the exception: its documented prompt is literally "separate the
+   * element inside the red box", so there the rectangle has to be visible.
+   */
+  drawBoxes?: boolean;
   mimeType?: "image/jpeg" | "image/png";
   quality?: number;
 };
@@ -85,6 +101,7 @@ export async function renderComposite(
     if (a.hidden) continue;
     if (a.kind === "brush") drawBrush(ctx, a, scale);
     else if (a.kind === "arrow") drawArrow(ctx, a, scale);
+    else if (a.kind === "box" && opts.drawBoxes) drawBox(ctx, a, scale);
   }
 
   const mime = opts.mimeType ?? "image/jpeg";
@@ -125,6 +142,24 @@ function drawBrush(
     ctx.lineTo(a.points[i] * scale, a.points[i + 1] * scale);
   }
   ctx.stroke();
+  ctx.restore();
+}
+
+/** Red, because the prompt that reads these says "red box" by name. */
+const REGION_BOX_COLOR = "#FF0000";
+
+function drawBox(
+  ctx: CanvasRenderingContext2D,
+  a: BoxAnnotation,
+  scale: number,
+): void {
+  const r = normalizeRect(a.rect);
+  ctx.save();
+  ctx.strokeStyle = REGION_BOX_COLOR;
+  // Scale the outline with the image so it stays visible after downscaling —
+  // a hairline on a 4000px source disappears at vision scale.
+  ctx.lineWidth = Math.max(2, (Math.max(ctx.canvas.width, ctx.canvas.height) / 300));
+  ctx.strokeRect(r.x * scale, r.y * scale, r.w * scale, r.h * scale);
   ctx.restore();
 }
 

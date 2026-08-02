@@ -833,6 +833,40 @@ describe("reference roles (§5C)", () => {
     expect(r.prompt).toContain("Do not copy its content");
   });
 
+  it("anchors to the first reference when no ref is marked base", () => {
+    // Seedream treats image[0] as the subject whether or not anything is
+    // labelled "base", so the first ref IS the anchor. The old wording said
+    // "the first reference", which on a two-ref set told the model to match
+    // reference 1 against itself.
+    const r = compileAnnotationPrompt({
+      instruction: "fuse these",
+      refs: [
+        ref([], { index: 1, refId: "a", role: "subject", width: 100, height: 100 }),
+        ref([], { index: 2, refId: "b", role: "subject", width: 100, height: 100 }),
+      ],
+    });
+    expect(r.prompt).toContain("of reference image 1");
+    expect(r.prompt).not.toContain("the first reference");
+    // The anchor does not describe itself.
+    expect(r.prompt).not.toContain("Reference image 1 is a subject reference");
+    expect(r.prompt).toContain("Reference image 2 is a subject reference");
+  });
+
+  it("keeps the anchor's own line when it does not point back at the anchor", () => {
+    // Suppressing the anchor wholesale silently lost real guidance: a style
+    // reference in slot 1 describes itself and is not circular, so it stays.
+    const r = compileAnnotationPrompt({
+      instruction: "fuse these",
+      refs: [
+        ref([], { index: 1, refId: "a", role: "style", width: 100, height: 100 }),
+        ref([], { index: 2, refId: "b", role: "subject", width: 100, height: 100 }),
+      ],
+    });
+    expect(r.prompt).toContain("Reference image 1 is a style reference");
+    expect(r.prompt).toContain("Reference image 2 is a subject reference");
+    expect(r.prompt).toContain("of reference image 1");
+  });
+
   it("keeps the verified target format untouched alongside roles", () => {
     const r = compileAnnotationPrompt({
       instruction: "x",

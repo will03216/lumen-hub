@@ -19,6 +19,7 @@
 import * as React from "react";
 import type { NormalizedLayer } from "./layers-normalize";
 import { getEditSession } from "./sessions";
+import { maxInputPixels, toWireImage } from "./use-edit-render";
 
 /**
  * Viewer state for one separation.
@@ -29,6 +30,10 @@ import { getEditSession } from "./sessions";
  */
 export type LayerState = {
   status: "idle" | "running" | "ready" | "failed";
+  /** Which reference this result describes. The hook holds ONE slot, and the
+   *  agent can target any reference, so without this a separation of ref B
+   *  would silently sit under ref A's heading in the panel. */
+  refId: string | null;
   layers: NormalizedLayer[];
   warnings: string[];
   error?: string;
@@ -39,6 +44,7 @@ export type LayerState = {
 
 const EMPTY: LayerState = {
   status: "idle",
+  refId: null,
   layers: [],
   warnings: [],
   hidden: new Set(),
@@ -57,23 +63,74 @@ export function useLayerSeparation(sessionId: string) {
     setState(EMPTY);
   }, [sessionId]);
 
+  /**
+   * Returns an outcome rather than only setting state.
+   *
+   * The agent awaits this. Swallowing failures into setState and resolving
+   * anyway meant the model was told "separation finished, the layers are in
+   * the panel" on a 402, an empty split, or a missing reference — and then
+   * relayed that to the user while the panel showed red. That is the one
+   * seam where the model can be actively lied to.
+   */
   const separate = React.useCallback(
-    async (maxLayers: number) => {
-      const ref = getEditSession(sessionId)?.refs[0];
-      if (!ref) return;
+    async (
+      maxLayers: number,
+      opts: { refId?: string; mode?: "auto" | "region" } = {},
+    ): Promise<{ ok: boolean; message: string }> => {
+      const session = getEditSession(sessionId);
+      const ref = opts.refId
+        ? session?.refs.find((r) => r.id === opts.refId)
+        : session?.refs[0];
+      if (!session || !ref) {
+        const message = opts.refId
+          ? `No reference ${opts.refId} in this session.`
+          : "Add an image before separating layers.";
+        setState({
+          ...EMPTY,
+          status: "failed",
+          refId: opts.refId ?? null,
+          error: message,
+        });
+        return { ok: false, message };
+      }
+
+      const mode = opts.mode ?? "auto";
+      // Region mode's prompt says "the element inside the red box" by name,
+      // so the boxes have to be visible in the pixels. Sending the clean
+      // image would ask the model to find markup that isn't there.
+      const boxes = ref.annotations.filter(
+        (a) => a.kind === "box" && !a.hidden,
+      );
+      if (mode === "region" && boxes.length === 0) {
+        const message =
+          "Region mode needs at least one box mark on the image; there are none.";
+        setState({ ...EMPTY, status: "failed", refId: ref.id, error: message });
+        return { ok: false, message };
+      }
 
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      setState({ ...EMPTY, status: "running" });
+      setState({ ...EMPTY, status: "running", refId: ref.id });
 
       try {
+        // NOT ref.url. A /library-cache/… path is same-origin to us and
+        // unreachable from BytePlus's servers; posting it raw failed every
+        // call on the two commonest entry paths. Shared with the render path
+        // precisely so this cannot diverge again.
+        const image = await toWireImage(ref, {
+          maxPixels: maxInputPixels(session.model),
+          annotations: mode === "region" ? boxes : [],
+          drawBoxes: mode === "region",
+        });
+        if (ctrl.signal.aborted) return { ok: false, message: "Cancelled." };
+
         const res = await fetch("/api/edit/layers", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            image: ref.url,
-            mode: "auto",
+            image,
+            mode,
             maxLayers,
             sourceWidth: ref.width,
             sourceHeight: ref.height,
@@ -86,24 +143,21 @@ export function useLayerSeparation(sessionId: string) {
           unknown?: unknown[];
           error?: string;
         };
-        if (ctrl.signal.aborted) return;
+        if (ctrl.signal.aborted) return { ok: false, message: "Cancelled." };
 
         if (!res.ok) {
-          setState({
-            ...EMPTY,
-            status: "failed",
-            // 402 is a missing key; 403/404 from upstream usually means the
-            // capability is not enabled on this account rather than that
-            // anything is broken. Say which, so the user doesn't debug the
-            // wrong thing.
-            error:
-              res.status === 402
-                ? "Add your BytePlus API key in Settings to use layer separation."
-                : res.status === 403 || res.status === 404
-                  ? "Layer separation isn't enabled for this BytePlus key. It's a preview feature and is granted per account."
-                  : (data.error ?? `Layer separation failed (${res.status}).`),
-          });
-          return;
+          // 402 is a missing key; 403/404 from upstream usually means the
+          // capability is not enabled on this account rather than that
+          // anything is broken. Say which, so the user doesn't debug the
+          // wrong thing.
+          const message =
+            res.status === 402
+              ? "Add your BytePlus API key in Settings to use layer separation."
+              : res.status === 403 || res.status === 404
+                ? "Layer separation isn't enabled for this BytePlus key. It's a preview feature and is granted per account."
+                : (data.error ?? `Layer separation failed (${res.status}).`);
+          setState({ ...EMPTY, status: "failed", refId: ref.id, error: message });
+          return { ok: false, message };
         }
 
         const layers = data.layers ?? [];
@@ -116,23 +170,30 @@ export function useLayerSeparation(sessionId: string) {
           );
         }
 
+        const ok = layers.length > 0;
         setState({
-          status: layers.length > 0 ? "ready" : "failed",
+          status: ok ? "ready" : "failed",
+          refId: ref.id,
           layers,
           warnings,
           hidden: new Set(),
-          error:
-            layers.length > 0
-              ? undefined
-              : "Nothing was separated out of this image.",
+          error: ok ? undefined : "Nothing was separated out of this image.",
         });
+        return {
+          ok,
+          message: ok
+            ? `Separated into ${layers.length} layer${layers.length === 1 ? "" : "s"}: ${layers
+                .map((l) => (l.zIndex === 0 ? "background" : (l.name ?? `layer ${l.zIndex}`)))
+                .join(", ")}. They are listed in the Layers panel.`
+            : "Nothing was separated out of this image.",
+        };
       } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setState({
-          ...EMPTY,
-          status: "failed",
-          error: e instanceof Error ? e.message : String(e),
-        });
+        if (e instanceof DOMException && e.name === "AbortError") {
+          return { ok: false, message: "Cancelled." };
+        }
+        const message = e instanceof Error ? e.message : String(e);
+        setState({ ...EMPTY, status: "failed", refId: ref.id, error: message });
+        return { ok: false, message };
       } finally {
         if (abortRef.current === ctrl) abortRef.current = null;
       }
