@@ -3,15 +3,15 @@
 /**
  * /edit/[id] — the editor shell.
  *
- * P0 renders the base image in a plain <img>. P1 replaces that single element
- * with the Konva canvas, behind a dynamic({ssr:false}) loader — this file must
- * never import react-konva itself, or the client/server boundary that keeps
- * `canvas` out of the server bundle is defeated.
+ * This file MUST NOT import react-konva, directly or via a value import of a
+ * Konva type. The canvas is reached only through canvas-loader.tsx, which is
+ * what keeps konva's Node entry (and its native `canvas` dependency) out of
+ * the server bundle. `import type { EditTool }` below is safe precisely
+ * because it erases at compile time.
  *
- * Everything else here is already the shape the later phases need: the store
- * is the single source of truth, edits write through it rather than into
- * local state, and the version rail reads from the same record the render
- * hook patches.
+ * The store is the single source of truth: every edit writes through it and
+ * comes back via useEditSession. Nothing here mirrors session data into local
+ * state, so the canvas, the panel, and the version rail cannot disagree.
  */
 
 import * as React from "react";
@@ -24,11 +24,27 @@ import {
   IMAGE_QUALITIES,
   type ImageQualityId,
 } from "@/lib/studio/models";
-import { lastWriteError, updateEditSession } from "@/lib/edit/sessions";
+import {
+  lastWriteError,
+  newEditId,
+  removeAnnotation,
+  updateEditSession,
+  upsertAnnotation,
+} from "@/lib/edit/sessions";
+import { buildAnnotation, type DraftAnnotation } from "@/lib/edit/annotations";
 import { useEditSession } from "@/lib/edit/use-edit-session";
 import { buildEditRequest, useEditRender } from "@/lib/edit/use-edit-render";
-import type { EditSession, EditVersion } from "@/lib/edit/types";
+import {
+  MARKER_COLOR,
+  type Annotation,
+  type EditSession,
+  type EditVersion,
+} from "@/lib/edit/types";
 import { cn } from "@/lib/utils";
+import EditCanvasLoader from "./canvas-loader";
+import type { EditTool } from "./edit-canvas";
+import { ToolRail } from "./tool-rail";
+import { AnnotationPanel } from "./annotation-panel";
 
 const ASPECTS = [
   { id: "source", label: "Source" },
@@ -48,8 +64,47 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
+  const [tool, setTool] = React.useState<EditTool>("box");
+  const [brushWidth, setBrushWidth] = React.useState(24);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [showCompiled, setShowCompiled] = React.useState(false);
   const [viewVersionId, setViewVersionId] = React.useState<string | null>(null);
+
+  const activeRef = session?.refs[0] ?? null;
+  const activeRefId = activeRef?.id ?? null;
+
+  const handleCommit = React.useCallback(
+    (draft: DraftAnnotation) => {
+      if (!activeRefId) return;
+      const existing =
+        session?.refs.find((r) => r.id === activeRefId)?.annotations ?? [];
+      const ann = buildAnnotation(draft, existing, {
+        id: newEditId(),
+        now: Date.now(),
+        color: MARKER_COLOR,
+      });
+      upsertAnnotation(sessionId, activeRefId, ann);
+      setSelectedId(ann.id);
+    },
+    [sessionId, activeRefId, session],
+  );
+
+  const handlePatch = React.useCallback(
+    (id: string, patch: { note?: string; hidden?: boolean }) => {
+      if (!activeRefId) return;
+      const current = session?.refs
+        .find((r) => r.id === activeRefId)
+        ?.annotations.find((a) => a.id === id);
+      if (!current) return;
+      // Spread onto the concrete member, not onto the union — see the note on
+      // AnnotationPanel's onPatch type.
+      upsertAnnotation(sessionId, activeRefId, {
+        ...current,
+        ...patch,
+      } as Annotation);
+    },
+    [sessionId, activeRefId, session],
+  );
 
   if (!mounted) {
     return (
@@ -76,15 +131,14 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
     );
   }
 
-  const base = session.refs[0];
-  const latestDone = [...session.versions].reverse().find(
-    (v) => v.status === "done" && v.outputs.length > 0,
-  );
+  const latestDone = [...session.versions]
+    .reverse()
+    .find((v) => v.status === "done" && v.outputs.length > 0);
   const viewing =
     session.versions.find((v) => v.id === viewVersionId) ?? latestDone;
-  const displayUrl = viewing?.outputs[0]?.url ?? base?.url;
   const busy = state.status === "running";
   const writeError = lastWriteError();
+  const annotations = activeRef?.annotations ?? [];
 
   return (
     <div className="mx-auto w-full max-w-[1440px] px-7 pb-16 pt-6">
@@ -107,9 +161,9 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             aria-label="Session name"
           />
         </div>
-        {base && (
+        {activeRef && (
           <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
-            {base.width}×{base.height}
+            {activeRef.width}×{activeRef.height}
           </span>
         )}
       </div>
@@ -121,46 +175,96 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
-        {/* Viewport. P1 swaps this block for the Konva canvas loader. */}
-        <div className="flex min-h-[420px] items-center justify-center rounded-[14px] border border-border bg-panel p-4">
-          {displayUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- remote CDN
-            // hosts aren't in the image optimizer's allow-list.
-            <img
-              src={displayUrl}
-              alt={viewing ? "Edited result" : "Source image"}
-              className="max-h-[70vh] w-auto max-w-full rounded-[8px] object-contain"
-            />
-          ) : (
-            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">
-              No image
-            </span>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[164px_1fr_280px]">
+        {/* Tools */}
+        <ToolRail
+          tool={tool}
+          onToolChange={setTool}
+          brushWidth={brushWidth}
+          onBrushWidthChange={setBrushWidth}
+        />
+
+        {/* Viewport */}
+        <div className="space-y-2">
+          <div className="h-[min(68vh,720px)] overflow-hidden rounded-[14px] border border-border bg-panel">
+            {viewing?.outputs[0]?.url ? (
+              <div className="flex size-full items-center justify-center p-4">
+                {/* eslint-disable-next-line @next/next/no-img-element -- remote
+                    CDN hosts aren't in the image optimizer's allow-list. */}
+                <img
+                  src={viewing.outputs[0].url}
+                  alt="Edited result"
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+            ) : activeRef ? (
+              <EditCanvasLoader
+                reference={activeRef}
+                annotations={annotations}
+                tool={tool}
+                brushWidth={brushWidth}
+                color={MARKER_COLOR}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onCommit={handleCommit}
+              />
+            ) : (
+              <div className="flex size-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.16em] text-ink-mute">
+                No image
+              </div>
+            )}
+          </div>
+
+          {viewing?.outputs[0]?.url && (
+            <button
+              onClick={() => setViewVersionId(null)}
+              className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink"
+            >
+              ← Back to the canvas
+            </button>
           )}
         </div>
 
-        {/* Version rail */}
-        <aside className="space-y-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
-            Versions
-          </div>
-          {session.versions.length === 0 ? (
-            <p className="text-[13px] leading-relaxed text-ink-mute">
-              No renders yet. Describe a change below and hit Render.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {[...session.versions].reverse().map((v, i) => (
-                <VersionRow
-                  key={v.id}
-                  version={v}
-                  n={session.versions.length - i}
-                  active={viewing?.id === v.id}
-                  onClick={() => setViewVersionId(v.id)}
-                />
-              ))}
+        {/* Marks + versions */}
+        <aside className="space-y-6">
+          <div className="space-y-2">
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
+              Marks
             </div>
-          )}
+            <AnnotationPanel
+              annotations={annotations}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onPatch={handlePatch}
+              onRemove={(id) => {
+                if (activeRefId) removeAnnotation(sessionId, activeRefId, id);
+                if (selectedId === id) setSelectedId(null);
+              }}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
+              Versions
+            </div>
+            {session.versions.length === 0 ? (
+              <p className="text-[13px] leading-relaxed text-ink-mute">
+                No renders yet.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {[...session.versions].reverse().map((v, i) => (
+                  <VersionRow
+                    key={v.id}
+                    version={v}
+                    n={session.versions.length - i}
+                    active={viewing?.id === v.id}
+                    onClick={() => setViewVersionId(v.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 
@@ -236,6 +340,14 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
           </div>
         )}
 
+        {state.warnings && state.warnings.length > 0 && (
+          <ul className="space-y-0.5 text-[12px] text-ink-mute">
+            {state.warnings.map((w) => (
+              <li key={w}>· {w}</li>
+            ))}
+          </ul>
+        )}
+
         {/* The disclosure exists because "what did it actually send?" is the
             first question whenever a render surprises someone in a demo. */}
         <div>
@@ -254,17 +366,16 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
 
 function CompiledPrompt({ session }: { session: EditSession }) {
   const req = React.useMemo(() => buildEditRequest(session), [session]);
+  const transports = req.plans
+    .map((p) => `ref ${p.index}: ${p.transport}`)
+    .join(", ");
   return (
-    <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-border bg-[var(--bg)] p-3 font-mono text-[11px] leading-relaxed text-ink-dim">
+    <pre className="mt-2 max-h-[280px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-border bg-[var(--bg)] p-3 font-mono text-[11px] leading-relaxed text-ink-dim">
       {req.prompt || "(empty)"}
       {"\n\n"}
       {`model: ${req.model}\nsize:  ${req.size}${
         req.seed !== undefined ? `\nseed:  ${req.seed}` : ""
-      }\nimage: ${
-        Array.isArray(req.image)
-          ? `${req.image.length} refs`
-          : (req.image ?? "none")
-      }`}
+      }\n${transports || "no references"}`}
     </pre>
   );
 }

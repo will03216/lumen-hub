@@ -3,26 +3,34 @@
 /**
  * The render loop for the editor.
  *
- * P0 scope: instruction + base image → POST /api/image. No annotations yet —
- * buildEditRequest() below is the seam the P1 compiler drops into, and it is
- * exported and pure so the request shape can be tested without the hook.
+ * Wraps /api/image rather than forking it. That route already carries strict
+ * BYOK (402 on a missing key), 1:1 upstream status forwarding so the error
+ * classifier can dispatch on it, the fal branch, and a 300s maxDuration. A
+ * parallel "edit" route would duplicate all of that and drift from it.
  *
- * Deliberately wraps /api/image rather than forking it. That route already
- * carries strict BYOK (402 on a missing key), 1:1 upstream status forwarding
- * so the error classifier can dispatch on it, the fal branch, and a 300s
- * maxDuration. A parallel "edit" route would duplicate all of that and drift
- * from it the first time either side changed.
+ * Three stages, split so the first is pure and testable:
+ *
+ *   buildEditRequest   session -> prompt + per-ref transport plan   (pure)
+ *   resolveWireImages  plan -> the actual image[] payload           (async, DOM)
+ *   render             fetch, patch the version, stage to Library   (hook)
  *
  * The version record is written BEFORE the request goes out, as `pending`,
- * and patched on settle. That ordering is what makes a render survive a
+ * and patched on settle. That ordering is what lets a render survive a
  * refresh mid-flight: the row is already in the store, so the workspace shows
- * it as failed rather than losing the instruction and the compiled prompt
- * that produced it.
+ * it as failed rather than losing the instruction and compiled prompt that
+ * produced it.
  */
 
 import * as React from "react";
 import { classifyError, type ErrorClass } from "@/lib/compare/error-class";
 import { stageGeneratedImage } from "@/lib/library/auto-save";
+import { modelMaxPixels } from "@/lib/studio/models";
+import {
+  compileAnnotationPrompt,
+  type CompiledRefPlan,
+} from "./annotation-prompt";
+import { renderComposite } from "./composite";
+import { resolveSafeUrl } from "./same-origin";
 import {
   appendVersion,
   getEditSession,
@@ -30,7 +38,17 @@ import {
   patchVersion,
 } from "./sessions";
 import { sizeForEdit } from "./size";
-import type { EditSession, EditVersion } from "./types";
+import type { EditReference, EditSession, EditVersion } from "./types";
+
+/**
+ * Ceiling for what we send *in*. There is no point feeding the model more
+ * detail than it can emit, and an un-downscaled 6000×4000 composite base64s
+ * to tens of megabytes of JSON. Falls back for models with no declared
+ * ceiling (the fal-hosted one).
+ */
+function maxInputPixels(modelId: string): number {
+  return modelMaxPixels(modelId) ?? 4_194_304;
+}
 
 // ─────────────────────────── Request building ─────────────────────────────
 
@@ -39,46 +57,106 @@ export type EditRequest = {
   model: string;
   size: string;
   seed?: number;
-  /** Single URL or an array for multi-ref. Omitted for a text-only render. */
-  image?: string | string[];
-  /** Ref ids in the same order as `image`, for the version record. */
+  /** Refs in wire order — parallel to the eventual image[] array. */
+  orderedRefs: EditReference[];
   refIds: string[];
+  plans: CompiledRefPlan[];
+  warnings: string[];
 };
 
 /**
- * Pure: session → the exact body /api/image will receive.
+ * Pure: session -> everything about the request that doesn't need the DOM.
  *
- * P1 replaces the prompt line with compileAnnotationPrompt(), which appends
- * the `<point>` / `<bbox>` coordinate tags. Everything else — ordering, the
- * base-ref-first rule, sizing — stays as it is here.
+ * The prompt includes the compiled `<point>` / `<bbox>` coordinate tags. The
+ * plans say, per reference, whether the clean image will do or whether the
+ * hand-drawn markup has to be burned into a copy first.
  */
 export function buildEditRequest(session: EditSession): EditRequest {
   // Base ref first: it is the image being edited, and Seedream treats the
-  // first entry as the subject when several are supplied.
-  const ordered = [
+  // first entry of image[] as the subject when several are supplied.
+  const orderedRefs = [
     ...session.refs.filter((r) => r.role === "base"),
     ...session.refs.filter((r) => r.role !== "base"),
   ];
-  const base = ordered[0];
+  const base = orderedRefs[0];
 
-  const size = sizeForEdit({
-    width: base?.width ?? 0,
-    height: base?.height ?? 0,
-    modelId: session.model,
-    aspectRatio: session.aspectRatio,
-    qualityId: session.qualityId,
+  const compiled = compileAnnotationPrompt({
+    instruction: session.instruction.trim(),
+    refs: orderedRefs.map((r, i) => ({
+      index: i + 1, // 1-based, matching the wire array
+      refId: r.id,
+      width: r.width,
+      height: r.height,
+      role: r.role,
+      label: r.label,
+      annotations: r.annotations,
+    })),
   });
 
-  const urls = ordered.map((r) => r.url);
-
   return {
-    prompt: session.instruction.trim(),
+    prompt: compiled.prompt,
     model: session.model,
-    size,
+    size: sizeForEdit({
+      width: base?.width ?? 0,
+      height: base?.height ?? 0,
+      modelId: session.model,
+      aspectRatio: session.aspectRatio,
+      qualityId: session.qualityId,
+    }),
     seed: session.seed,
-    image: urls.length === 0 ? undefined : urls.length === 1 ? urls[0] : urls,
-    refIds: ordered.map((r) => r.id),
+    orderedRefs,
+    refIds: orderedRefs.map((r) => r.id),
+    plans: compiled.plans,
+    warnings: compiled.warnings,
   };
+}
+
+/**
+ * Turn the plan into the actual `image` payload.
+ *
+ * Two things force this to be more than "send the URLs":
+ *
+ * · A ref carrying brush or arrow markup has to be rasterised, because those
+ *   annotations have no representation in the prompt.
+ *
+ * · A local URL (`/library-cache/…`) is same-origin to *us* and unreachable
+ *   from BytePlus's servers. Anything not absolute-http must be inlined as a
+ *   data URI or the upstream fetch silently gets nothing. This is the whole
+ *   reason uploads can't just be passed through by path.
+ *
+ * Remote https URLs are passed through untouched — letting the model fetch
+ * them directly avoids base64-ing megabytes through our own request.
+ */
+export async function resolveWireImages(
+  req: EditRequest,
+): Promise<string | string[] | undefined> {
+  const cap = maxInputPixels(req.model);
+
+  const images = await Promise.all(
+    req.orderedRefs.map(async (ref) => {
+      const plan = req.plans.find((p) => p.refId === ref.id);
+      const needsComposite = plan?.transport === "composite";
+      const isRemote = /^https?:/i.test(ref.url);
+
+      if (!needsComposite && isRemote) return ref.url;
+
+      const safe = resolveSafeUrl(ref.safeUrl ?? ref.url);
+      const { dataUrl } = await renderComposite({
+        url: safe.url,
+        crossOrigin: safe.crossOrigin,
+        width: ref.width,
+        height: ref.height,
+        // Passing an empty list still gets us the downscale-and-inline pass,
+        // which is exactly what a local clean image needs.
+        annotations: needsComposite ? ref.annotations : [],
+        maxPixels: cap,
+      });
+      return dataUrl;
+    }),
+  );
+
+  if (images.length === 0) return undefined;
+  return images.length === 1 ? images[0] : images;
 }
 
 // ─────────────────────────── Hook ─────────────────────────────────────────
@@ -87,12 +165,13 @@ export type EditRenderStatus = "idle" | "running" | "success" | "error";
 
 export type EditRenderState = {
   status: EditRenderStatus;
-  /** The version this run is writing into, so the UI can highlight it. */
   versionId?: string;
   error?: ErrorClass;
   /** Set when the failure was a missing BYOK key, so the UI can link to
    *  Settings instead of offering a pointless Retry. */
   missingKey?: boolean;
+  /** Non-fatal compiler notes (a demoted box, a dropped mark over the cap). */
+  warnings?: string[];
   elapsedMs?: number;
 };
 
@@ -119,7 +198,7 @@ export function useEditRender(sessionId: string) {
     if (!session) return;
 
     const req = buildEditRequest(session);
-    if (!req.prompt) {
+    if (!req.prompt.trim()) {
       setState({
         status: "error",
         error: classifyError(400, "Describe the edit you want before rendering."),
@@ -134,7 +213,7 @@ export function useEditRender(sessionId: string) {
 
     const startedAt = Date.now();
     const versionId = newEditId();
-    const pending: EditVersion = {
+    appendVersion(sessionId, {
       id: versionId,
       createdAt: startedAt,
       parentId: session.versions.at(-1)?.id,
@@ -149,11 +228,16 @@ export function useEditRender(sessionId: string) {
       ),
       outputs: [],
       status: "pending",
-    };
-    appendVersion(sessionId, pending);
-    setState({ status: "running", versionId });
+    } satisfies EditVersion);
+    setState({ status: "running", versionId, warnings: req.warnings });
 
     try {
+      // Rasterising happens before the fetch so a compositing failure — the
+      // tainted-canvas case — is reported as itself rather than as an
+      // upstream error about a missing image.
+      const image = await resolveWireImages(req);
+      if (ctrl.signal.aborted) return;
+
       const res = await fetch("/api/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -162,7 +246,7 @@ export function useEditRender(sessionId: string) {
           model: req.model,
           size: req.size,
           seed: req.seed,
-          image: req.image,
+          image,
         }),
         signal: ctrl.signal,
       });
@@ -175,18 +259,24 @@ export function useEditRender(sessionId: string) {
         // 402 is the strict-BYOK signal, not a model failure. Retrying it
         // without adding a key just reproduces it.
         const missingKey = res.status === 402;
-        const error = classifyError(res.status, message);
         patchVersion(sessionId, versionId, {
           status: "failed",
           error: message,
           elapsedMs: Date.now() - startedAt,
         });
-        setState({ status: "error", versionId, error, missingKey });
+        setState({
+          status: "error",
+          versionId,
+          error: classifyError(res.status, message),
+          missingKey,
+          warnings: req.warnings,
+        });
         return;
       }
 
-      const outputs = ((data as { data?: Array<{ url?: string; size?: string }> })
-        .data ?? [])
+      const outputs = (
+        (data as { data?: Array<{ url?: string; size?: string }> }).data ?? []
+      )
         .filter((d): d is { url: string; size?: string } => Boolean(d.url))
         .map((d) => ({ url: d.url, size: d.size }));
 
@@ -212,11 +302,12 @@ export function useEditRender(sessionId: string) {
 
       setState(
         outputs.length > 0
-          ? { status: "success", versionId, elapsedMs }
+          ? { status: "success", versionId, elapsedMs, warnings: req.warnings }
           : {
               status: "error",
               versionId,
               error: classifyError(502, "Model returned no image."),
+              warnings: req.warnings,
             },
       );
     } catch (e) {
@@ -232,6 +323,7 @@ export function useEditRender(sessionId: string) {
         status: "error",
         versionId,
         error: classifyError(undefined, message),
+        warnings: req.warnings,
       });
     } finally {
       if (abortRef.current === ctrl) abortRef.current = null;
