@@ -29,7 +29,7 @@
  * on pointermove would JSON.stringify a multi-hundred-KB session at 60 Hz.
  */
 
-import { userKey } from "@/lib/storage-user";
+import { subscribeStorageUser, userKey } from "@/lib/storage-user";
 import { DEFAULT_IMAGE_MODEL_ID } from "@/lib/studio/models";
 import {
   MAX_ANNOTATIONS_PER_REF,
@@ -117,6 +117,27 @@ const cachedSessions = new Map<string, EditSession | null>();
 function invalidate(): void {
   cachedList = null;
   cachedSessions.clear();
+}
+
+/**
+ * Re-read everything when the localStorage scope changes.
+ *
+ * Without this, a hard load of /edit/[id] reads the store BEFORE Clerk has
+ * resolved the user — so it reads the unscoped key, misses, caches the miss
+ * (getSessionSnapshot must be reference-stable, so a miss is cached like any
+ * other result), and the page says "Session not found" for as long as it
+ * stays open. Opening the same session by clicking through from /edit worked,
+ * which is exactly why this looked like "refresh is broken" rather than a
+ * storage bug.
+ *
+ * The notify is what makes React look again — invalidating alone would only
+ * take effect on the next unrelated write.
+ */
+if (typeof window !== "undefined") {
+  subscribeStorageUser(() => {
+    invalidate();
+    listeners.forEach((cb) => cb());
+  });
 }
 
 export function subscribeEditSessions(cb: Listener): () => void {

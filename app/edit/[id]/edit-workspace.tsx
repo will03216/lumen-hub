@@ -30,6 +30,7 @@ import {
 } from "@/lib/edit/sessions";
 import { buildAnnotation, type DraftAnnotation } from "@/lib/edit/annotations";
 import { useEditSession } from "@/lib/edit/use-edit-session";
+import { useStorageUserReady } from "@/lib/use-storage-user";
 import { useLayerSeparation } from "@/lib/edit/use-layer-separation";
 import { buildEditRequest, useEditRender } from "@/lib/edit/use-edit-render";
 import {
@@ -63,6 +64,7 @@ const ASPECTS = [
 
 export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const session = useEditSession(sessionId);
+  const storageReady = useStorageUserReady();
   const { state, render, cancel } = useEditRender(sessionId);
   const layers = useLayerSeparation(sessionId);
 
@@ -156,7 +158,12 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
     (instruction) => updateEditSession(sessionId, { instruction }),
   );
 
-  if (!mounted) {
+  // Two different "not yet"s. `mounted` is hydration; `storageReady` is Clerk
+  // telling us WHOSE localStorage this is. Reading before the second one
+  // resolves hits the unscoped key, so declaring the session missing there
+  // would be a lie — and until this store re-read on that signal, a refresh
+  // of a perfectly good session said "Session not found" permanently.
+  if (!mounted || !storageReady) {
     return (
       <Centered>
         <Loader2 className="size-5 animate-spin text-ink-dim" />
