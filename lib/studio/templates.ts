@@ -549,6 +549,166 @@ const referenceCreativePackage: StudioTemplate = {
   },
 };
 
+// ─────────────────────────── Adtech ────────────────────────────────────
+
+const adtechUploadToVideo: StudioTemplate = {
+  id: "adtech-upload-to-video",
+  name: "Adtech · Upload → Video",
+  description:
+    "Upload a product image, describe the motion, animate it. Asset + Text Prompt → Video Gen (Seedance 2.0, 720p) → Preview.",
+  badge: "IMG→V",
+  order: 7,
+  build: (): CanvasShape => {
+    const ap = newId("ap");
+    const tp = newId("tp");
+    const vg = newId("vg");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: ap,
+          type: "asset",
+          position: POS(0, 0),
+          data: { form: {} },
+        },
+        {
+          id: tp,
+          type: "textPrompt",
+          position: POS(0, 360),
+          data: {
+            form: textForm(
+              "Slow push-in on the product, soft studio light sweeping across the surface, subtle rotation, premium commercial look",
+            ),
+          },
+        },
+        {
+          id: vg,
+          type: "videoGen",
+          position: POS(440, 120),
+          data: { form: videoForm() },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(860, 120),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${ap}-${vg}-image`,
+          source: ap,
+          sourceHandle: "url",
+          target: vg,
+          targetHandle: "image",
+        },
+        {
+          id: `${tp}-${vg}-prompt`,
+          source: tp,
+          sourceHandle: "prompt",
+          target: vg,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${vg}-${pv}-url`,
+          source: vg,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
+const adtechProductModelToVideo: StudioTemplate = {
+  id: "adtech-product-model-to-video",
+  name: "Adtech · Product + Model → Video",
+  description:
+    "Generate a product-and-model still with Seedream 5.0 Pro, then animate it. Image Prompt → Image Gen (Seedream 5.0 Pro) → Video Gen (Seedance 2.0, 720p) → Preview.",
+  badge: "T2I→V",
+  order: 8,
+  build: (): CanvasShape => {
+    const ip = newId("tp-image");
+    const vp = newId("tp-video");
+    const ig = newId("ig");
+    const vg = newId("vg");
+    const pv = newId("pv");
+    return {
+      nodes: [
+        {
+          id: ip,
+          type: "textPrompt",
+          position: POS(0, 0),
+          data: {
+            form: textForm(
+              "A model holding the product in a bright studio, clean seamless background, natural pose, soft commercial lighting, editorial fashion campaign, sharp product detail",
+            ),
+          },
+        },
+        {
+          id: vp,
+          type: "textPrompt",
+          position: POS(0, 400),
+          data: {
+            form: textForm(
+              "The model gently turns toward camera and presents the product, subtle hair and fabric movement, slow cinematic push-in, premium commercial look",
+            ),
+          },
+        },
+        {
+          id: ig,
+          type: "imageGen",
+          position: POS(440, -40),
+          data: { form: imageForm() },
+        },
+        {
+          id: vg,
+          type: "videoGen",
+          position: POS(880, 200),
+          data: { form: videoForm() },
+        },
+        {
+          id: pv,
+          type: "preview",
+          position: POS(1300, 200),
+          data: { form: {} },
+        },
+      ],
+      edges: [
+        {
+          id: `${ip}-${ig}-prompt`,
+          source: ip,
+          sourceHandle: "prompt",
+          target: ig,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${ig}-${vg}-image`,
+          source: ig,
+          sourceHandle: "url",
+          target: vg,
+          targetHandle: "image",
+        },
+        {
+          id: `${vp}-${vg}-prompt`,
+          source: vp,
+          sourceHandle: "prompt",
+          target: vg,
+          targetHandle: "prompt",
+        },
+        {
+          id: `${vg}-${pv}-url`,
+          source: vg,
+          sourceHandle: "url",
+          target: pv,
+          targetHandle: "url",
+        },
+      ],
+    };
+  },
+};
+
 export const TEMPLATES: readonly StudioTemplate[] = [
   blank,
   cinematicStill,
@@ -556,6 +716,8 @@ export const TEMPLATES: readonly StudioTemplate[] = [
   imageToVideo,
   articleNarration,
   referenceCreativePackage,
+  adtechUploadToVideo,
+  adtechProductModelToVideo,
 ] as const;
 
 export function findTemplate(id: string): StudioTemplate | undefined {
