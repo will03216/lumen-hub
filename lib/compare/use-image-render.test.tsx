@@ -8,9 +8,12 @@
  *   3. moderation        → does NOT retry (retryable: false)
  *   4. success           → elapsedMs spans the full wait
  *
- * We stub `globalThis.fetch` instead of adding msw — it's one route, the
- * hook's contract is "POST once and read the body", and a fetch stub
- * keeps the test dead-obvious at a glance.
+ * We mock `requestImage` — the hook's transport seam — rather than global
+ * fetch. Since image generation went async (submit + poll), one logical
+ * attempt is no longer one fetch; `requestImage` hides that and resolves with
+ * a single `Response` per attempt, which is exactly the granularity these
+ * retry contracts care about. (The submit/poll transport itself is covered by
+ * request-image's own path.)
  *
  * Timers: vi.useFakeTimers() so the 3-second server-backoff gap doesn't
  * make tests slow or flaky. `runAllTimersAsync` drains the setTimeout +
@@ -28,8 +31,11 @@ import {
   type MockInstance,
 } from "vitest";
 import { useImageRender } from "./use-image-render";
+import { requestImage } from "./request-image";
 
-// ─────────────────────────── Fetch stub helpers ─────────────────────────
+vi.mock("./request-image", () => ({ requestImage: vi.fn() }));
+
+// ─────────────────────────── Transport stub helpers ─────────────────────
 
 /** Minimal Response shape the hook touches. We don't use `new Response()`
  *  because happy-dom's implementation doesn't allow re-reading body across
@@ -43,17 +49,17 @@ function mockResponse(status: number, body: unknown) {
   } as unknown as Response;
 }
 
-/** Script a sequence of fetch outcomes. Each call to fetch peels the next
- *  entry off the queue — lets us express "first call fails 500, second
- *  succeeds" without a ton of mock boilerplate per test. */
-function scriptFetch(
+/** Script a sequence of requestImage outcomes. Each call peels the next entry
+ *  off the queue — lets us express "first attempt fails 500, second succeeds"
+ *  without a ton of mock boilerplate per test. */
+function scriptRequestImage(
   spy: MockInstance,
   script: Array<{ status: number; body: unknown } | { throws: unknown }>,
 ) {
   let i = 0;
   spy.mockImplementation(async () => {
     const step = script[i++];
-    if (!step) throw new Error(`fetch called ${i}× but script has no more steps`);
+    if (!step) throw new Error(`requestImage called ${i}× but script has no more steps`);
     if ("throws" in step) throw step.throws;
     return mockResponse(step.status, step.body);
   });
@@ -61,15 +67,15 @@ function scriptFetch(
 
 // ─────────────────────────── Setup / teardown ───────────────────────────
 
-let fetchSpy: MockInstance;
+let requestImageSpy: MockInstance;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  fetchSpy = vi.spyOn(globalThis, "fetch") as unknown as MockInstance;
+  requestImageSpy = requestImage as unknown as MockInstance;
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.clearAllMocks();
   vi.useRealTimers();
 });
 
@@ -79,7 +85,7 @@ describe("useImageRender — auto-retry contracts", () => {
   it("silently retries on 500 (short backoff) and surfaces success", async () => {
     // First attempt 500 → classifier returns {server, retryAfterMs: 3000}.
     // 3s ≤ 10s cap → auto-retry fires. Second attempt succeeds.
-    scriptFetch(fetchSpy, [
+    scriptRequestImage(requestImageSpy, [
       { status: 500, body: { error: "upstream hiccup" } },
       {
         status: 200,
@@ -107,7 +113,7 @@ describe("useImageRender — auto-retry contracts", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(requestImageSpy).toHaveBeenCalledTimes(2);
     expect(result.current.state.status).toBe("success");
     if (result.current.state.status === "success") {
       expect(result.current.state.images[0]?.url).toBe("https://cdn/img.png");
@@ -118,7 +124,7 @@ describe("useImageRender — auto-retry contracts", () => {
     // Even though 429 is "retryable", the classifier's suggested delay
     // (30s) exceeds AUTO_RETRY_MAX_DELAY_MS (10s) and we'd rather show
     // a "waiting" state than freeze a spinner for 30 seconds.
-    scriptFetch(fetchSpy, [
+    scriptRequestImage(requestImageSpy, [
       { status: 429, body: { error: "slow down" } },
     ]);
 
@@ -138,7 +144,7 @@ describe("useImageRender — auto-retry contracts", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(requestImageSpy).toHaveBeenCalledTimes(1);
     expect(result.current.state.status).toBe("error");
     if (result.current.state.status === "error") {
       expect(result.current.state.errorClass.type).toBe("rate-limit");
@@ -151,7 +157,7 @@ describe("useImageRender — auto-retry contracts", () => {
     // Wrapping the NSFW body in a 500 mirrors how our route used to
     // collapse BytePlus failures — moderation must still win via the
     // message-match branch, not fall into the server-retry bucket.
-    scriptFetch(fetchSpy, [
+    scriptRequestImage(requestImageSpy, [
       { status: 500, body: { error: "content policy violation" } },
     ]);
 
@@ -169,7 +175,7 @@ describe("useImageRender — auto-retry contracts", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(requestImageSpy).toHaveBeenCalledTimes(1);
     expect(result.current.state.status).toBe("error");
     if (result.current.state.status === "error") {
       expect(result.current.state.errorClass.type).toBe("moderation");
@@ -186,7 +192,7 @@ describe("useImageRender — auto-retry contracts", () => {
     // reset the stopwatch.
     const T0 = 1_700_000_000_000;
     vi.setSystemTime(T0);
-    scriptFetch(fetchSpy, [
+    scriptRequestImage(requestImageSpy, [
       { status: 500, body: { error: "upstream hiccup" } },
       {
         status: 200,

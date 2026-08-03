@@ -10,8 +10,11 @@
  * views all land on one Image Gen `image` port to produce the hero.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { imageGenSpec } from "@/app/studio/nodes/image-gen-node";
+import { requestImage } from "@/lib/compare/request-image";
+
+vi.mock("@/lib/compare/request-image", () => ({ requestImage: vi.fn() }));
 
 const A = "https://cdn.example.com/front.png";
 const B = "https://cdn.example.com/back.png";
@@ -29,18 +32,18 @@ function run(image: string | undefined) {
 
 beforeEach(() => {
   sent = {};
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_url: string, init: { body: string }) => {
-      sent = JSON.parse(init.body);
-      return {
-        ok: true,
-        json: async () => ({ data: [{ url: "https://cdn.example.com/out.png" }] }),
-      } as unknown as Response;
-    }),
-  );
+  // The node now hands the request body straight to requestImage (submit +
+  // poll transport), so capture its first arg instead of a stringified fetch
+  // body. Same assertions — this is the object the node put on the wire.
+  (requestImage as Mock).mockImplementation(async (body: Record<string, unknown>) => {
+    sent = body;
+    return {
+      ok: true,
+      json: async () => ({ data: [{ url: "https://cdn.example.com/out.png" }] }),
+    } as unknown as Response;
+  });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => vi.clearAllMocks());
 
 describe("imageGen image port", () => {
   it("sends a single wired image as a plain string", async () => {
