@@ -21,6 +21,7 @@ import {
   MAX_UPLOAD_BYTES,
   imageFormatLabel,
 } from "@/lib/media/upload-formats";
+import { isAllowedRefUrl } from "./same-origin";
 import { addRef, createEditSession } from "./sessions";
 import type { EditRefRole, EditReference, EditSession } from "./types";
 
@@ -96,6 +97,11 @@ export function measureImage(
 export async function startEditSessionFromUrl(
   opts: StartFromUrlOpts,
 ): Promise<EditSession> {
+  // Checked at the boundary, not at every render site. A reference URL is
+  // stored and later rendered as a link, so a `javascript:` URL pasted into
+  // the add-by-URL box would be script in an href; `//host` looks like a
+  // same-origin path and is not one. See isAllowedRefUrl.
+  assertAllowedUrl(opts.url);
   const { width, height } = await measureImage(opts.url);
   return createEditSession({
     name: opts.name ?? defaultName(opts.url),
@@ -125,6 +131,9 @@ export async function addReferenceToSession(
 ): Promise<EditReference> {
   const url =
     typeof source === "string" ? source.trim() : (await uploadImage(source)).url;
+  // Same boundary check as startEditSessionFromUrl — this is the other way a
+  // typed URL enters the store.
+  assertAllowedUrl(url);
   const bytes = typeof source === "string" ? undefined : source.size;
   const { width, height } = await measureImage(url);
 
@@ -180,6 +189,21 @@ export async function startEditSessionFromFile(
 }
 
 // ─────────────────────────── Helpers ──────────────────────────────────────
+
+/**
+ * Refuse a URL we would not be willing to store and later render as a link.
+ *
+ * Throws rather than returning false: both callers are already in a
+ * try/catch that surfaces the message to the user, and a silent skip here
+ * would create a session whose reference is simply missing.
+ */
+function assertAllowedUrl(url: string): void {
+  if (!isAllowedRefUrl(url)) {
+    throw new Error(
+      "That doesn't look like an image URL. Paste an https:// link, or upload the file instead.",
+    );
+  }
+}
 
 function defaultName(url: string): string {
   const tail = url.split("?")[0].split("/").pop();

@@ -33,6 +33,7 @@
 import * as React from "react";
 import { Download, ExternalLink, Loader2 } from "lucide-react";
 import { formatBytes } from "@/lib/edit/curl";
+import { isAllowedRefUrl } from "@/lib/edit/same-origin";
 import {
   buildEditRequest,
   resolveWirePayloads,
@@ -134,6 +135,20 @@ function PayloadRow({ payload: p }: { payload: WirePayload }) {
     };
   }, [p.value, inline]);
 
+  function openFullSize() {
+    const bytes = decodeDataUri(p.value);
+    if (!bytes) {
+      window.open(p.value, "_blank", "noreferrer");
+      return;
+    }
+    const mime = p.value.slice(5, p.value.indexOf(";"));
+    const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    window.open(url, "_blank", "noreferrer");
+    // The tab keeps its own reference; revoking after a beat stops this one
+    // leaking a megabyte per click.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   function download() {
     const bytes = decodeDataUri(p.value);
     if (!bytes) {
@@ -158,18 +173,20 @@ function PayloadRow({ payload: p }: { payload: WirePayload }) {
   return (
     <div className="flex items-start gap-3 rounded-[10px] border border-border p-2">
       {/* The image element's src IS the payload string. What you are looking
-          at is byte-for-byte what BytePlus receives — not a re-render of it. */}
-      <a
-        href={p.value}
-        target="_blank"
-        rel="noreferrer"
-        className="size-16 shrink-0 overflow-hidden rounded-[6px] border border-border bg-[var(--bg)]"
+          at is byte-for-byte what BytePlus receives — not a re-render of it.
+          Opening it goes through a blob URL rather than the data: URI itself:
+          browsers block top-level navigation to data: URLs, so the obvious
+          `href={p.value}` silently did nothing for exactly the inlined images
+          this view exists to prove. */}
+      <button
+        onClick={openFullSize}
+        className="size-16 shrink-0 cursor-pointer overflow-hidden rounded-[6px] border border-border bg-[var(--bg)]"
         title="Open the exact payload at full size"
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- this is a
             data URI or a remote CDN URL; the optimizer handles neither. */}
         <img src={p.value} alt="" className="size-full object-contain" />
-      </a>
+      </button>
 
       <div className="min-w-0 flex-1 space-y-0.5">
         <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim">
@@ -203,15 +220,17 @@ function PayloadRow({ payload: p }: { payload: WirePayload }) {
           </RowAction>
           {/* The source, for an A/B. Comparing the two by eye is the whole
               point — markup present or absent is not subtle. */}
-          <a
-            href={sourceOf(p)}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-border-strong hover:text-ink"
-          >
-            <ExternalLink className="size-3" />
-            Open source
-          </a>
+          {isAllowedRefUrl(p.sourceUrl) && (
+            <a
+              href={p.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-border-strong hover:text-ink"
+            >
+              <ExternalLink className="size-3" />
+              Open source
+            </a>
+          )}
         </div>
       </div>
     </div>
@@ -233,11 +252,6 @@ function RowAction({
       {children}
     </button>
   );
-}
-
-/** Where the payload came from, for the side-by-side. */
-function sourceOf(p: WirePayload): string {
-  return p.sourceUrl;
 }
 
 /**

@@ -98,3 +98,42 @@ export function resolveSafeUrl(
   // because display has a fallback and compositing does not.
   return { url, crossOrigin: true, via: "direct-cors", shouldMirror: false };
 }
+
+/**
+ * Is this a URL we are willing to store as a reference and put in an href?
+ *
+ * Two things go wrong without it, both from the same input — the "add by URL"
+ * box, which until now took the string verbatim.
+ *
+ * · `javascript:` in an href. Every reference URL is rendered as a link in the
+ *   payload inspector, so a pasted `javascript:` URL becomes script that runs
+ *   on click. It is self-inflicted — sessions are local to one browser and
+ *   shared with nobody — but "you have to attack yourself" is not a security
+ *   model, it is an accident waiting for a copied-and-pasted URL.
+ *
+ * · `//evil.example/x.png`. Protocol-relative, so it LOOKS like a same-origin
+ *   path and is not one. Anything that decides "starts with / means ours"
+ *   without excluding this is wrong.
+ *
+ * `data:` is refused for a different reason: the store holds URLs only —
+ * inlining bytes into localStorage would eat the whole quota (see the
+ * invariant at the top of types.ts).
+ */
+export function isAllowedRefUrl(url: string): boolean {
+  const value = url.trim();
+  if (!value) return false;
+  // Protocol-relative — same-origin in appearance only.
+  if (value.startsWith("//")) return false;
+  // Same-origin path. The only relative form we accept; a bare filename or a
+  // "./x" has no defined base once it is stored and re-read later.
+  if (value.startsWith("/")) return true;
+  try {
+    const scheme = new URL(value).protocol;
+    return scheme === "https:" || scheme === "http:";
+  } catch {
+    // Not a URL at all — including every "javascript:alert(1)" variant that
+    // survives a parse, which the protocol check below would have caught
+    // anyway.
+    return false;
+  }
+}
