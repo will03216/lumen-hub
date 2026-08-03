@@ -15,6 +15,10 @@ export function StorageUserInit() {
   const { user, isLoaded } = useUser()
 
   useEffect(() => {
+    // Only once Clerk has answered. Calling it earlier would publish "signed
+    // out" as a resolved answer, and anything waiting for the scope would
+    // render its empty state a beat before the real user arrives.
+    if (!isLoaded) return
     setStorageUser(user?.id ?? null)
     // Hydrate cloud-backed stores once the user is known. Scoped storage must
     // be set first so the local merge target uses the right user's keys.

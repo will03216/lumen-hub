@@ -10,23 +10,22 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import {
+  ALLOWED_IMAGE_MIME,
+  ALLOWED_VIDEO_MIME,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_EXT,
+} from "@/lib/media/upload-formats";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ALLOWED_IMAGE = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-const ALLOWED_VIDEO = new Set(["video/mp4", "video/quicktime", "video/webm"]);
-const MAX_BYTES = 50 * 1024 * 1024; // 50 MB
-
-const EXT: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "video/mp4": "mp4",
-  "video/quicktime": "mov",
-  "video/webm": "webm",
-};
+// Shared with the client so a picker can't accept a file this route rejects.
+// See lib/media/upload-formats.ts.
+const ALLOWED_IMAGE = ALLOWED_IMAGE_MIME;
+const ALLOWED_VIDEO = ALLOWED_VIDEO_MIME;
+const MAX_BYTES = MAX_UPLOAD_BYTES;
+const EXT = UPLOAD_EXT;
 
 export async function POST(req: NextRequest) {
   let formData: FormData;

@@ -127,13 +127,69 @@ export type ImageGenParams = {
   max_images?: number; // sequential_image_generation_options.max_images (1–15)
 };
 
+/**
+ * Fields the layer-separation preview adds to each `data[]` entry. Preview-
+ * flagged and non-final upstream — every field optional.
+ *
+ * Deliberately additive: widening `ImageGenDatum` with optional properties is
+ * source-compatible, so `use-image-render.ts`, `image-generator.tsx` and
+ * `image-gen-node.tsx` compile untouched. Nothing here is trustworthy enough
+ * to destructure directly — route code goes through
+ * `lib/edit/layers-normalize.ts`, which is where all the shape tolerance
+ * lives (PRD §10 R1).
+ */
+export type ImageGenLayerFields = {
+  /** Stacking order. 0 is the background plate; 1..16 composite over it. */
+  z_index?: number;
+  /** Absolute is source pixels; normalized is the 0–1000 integer space the
+   *  annotation tags already use. Upstream may send either, both, or a bare
+   *  4-array — see the normalizer. */
+  bounding_box?: {
+    absolute?: [number, number, number, number];
+    normalized?: [number, number, number, number];
+  };
+  /** Model-generated short label, e.g. "left hand". Absent on the background. */
+  name?: string;
+  description?: string;
+};
+
+/** One entry in an image-generation response. Layer fields are only populated
+ *  by `separateLayers`; a normal generation leaves them undefined. */
+export type ImageGenDatum = {
+  url?: string;
+  b64_json?: string;
+  size?: string;
+} & ImageGenLayerFields;
+
 export type ImageGenResponse = {
   created: number;
-  data: Array<{ url?: string; b64_json?: string; size?: string }>;
+  data: Array<ImageGenDatum>;
   usage?: Record<string, unknown>;
 };
 
-export async function generateImage(params: ImageGenParams, apiKey?: string) {
+/** The one image-generation path, exported so a caller that needs to SHOW the
+ *  request (the editor's copy-as-cURL) points at the same URL we post to. */
+export const IMAGE_GENERATIONS_PATH = "/images/generations";
+
+/** Absolute endpoint, including whatever BYTEPLUS_BASE_URL is configured to
+ *  on THIS deployment. Server-only by nature — the base URL is not a public
+ *  env var, so anything client-side would silently print the default. */
+export function bytePlusEndpoint(path: string): string {
+  return `${BASE_URL}${path}`;
+}
+
+/**
+ * The exact JSON body `generateImage` puts on the wire.
+ *
+ * Extracted so the copy-as-cURL feature renders the real request rather than
+ * a second, hand-maintained guess at it. Model alias resolution and every
+ * default (response_format, watermark, size) live here, which is precisely
+ * the part a reimplementation would get wrong and nobody would notice until
+ * a demo. Pure — no I/O, no key.
+ */
+export function buildImageGenBody(
+  params: ImageGenParams,
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: resolveModel(params.model ?? IMAGE_MODEL),
     response_format: "url",
@@ -152,6 +208,90 @@ export async function generateImage(params: ImageGenParams, apiKey?: string) {
       };
     }
   }
+  return body;
+}
+
+export async function generateImage(params: ImageGenParams, apiKey?: string) {
+  return request<ImageGenResponse>(IMAGE_GENERATIONS_PATH, {
+    method: "POST",
+    body: JSON.stringify(buildImageGenBody(params)),
+  }, apiKey);
+}
+
+/**
+ * Layer separation — same endpoint, same auth, same error type as
+ * `generateImage`. The ONLY thing that differs is the prompt, so this is a
+ * thin wrapper rather than a second `request()` path: a fork would duplicate
+ * `resolveModel`, the Bearer plumbing and `BytePlusError` construction, and
+ * those three are exactly what we never want two copies of.
+ *
+ * The response comes back as an ordinary `ImageGenResponse` whose `data[]`
+ * entries carry the extra `ImageGenLayerFields`. That shape is preview-
+ * flagged and documented as non-final upstream, so callers must NOT read
+ * those fields directly — run the response through `normalizeLayerResponse`.
+ *
+ * Model: defaults to `IMAGE_MODEL` like every other call here, but layer
+ * separation is a Seedream 5.0 Pro preview feature — callers should pass the
+ * Pro id explicitly. On a key without preview access this surfaces as a plain
+ * BytePlusError with the upstream status, which the route forwards 1:1.
+ */
+export type LayerGenParams = {
+  /** Exactly one image. Layer separation is single-reference — an array is a
+   *  caller bug and the route rejects it before we get here. */
+  image: string;
+  model?: string;
+  size?: string;
+  seed?: number;
+  /** `auto` splits the whole frame; `region` isolates whatever the caller has
+   *  already marked with a red box in the composited input. */
+  mode?: "auto" | "region";
+  /** Only meaningful in `auto` mode. Clamped to the documented 1..16. */
+  maxLayers?: number;
+  /** Escape hatch: overrides both templates verbatim. Exists so a prompt fix
+   *  doesn't need a deploy of this file when the preview spec moves. */
+  instruction?: string;
+};
+
+/** Documented ceiling: 1 background plate + at most 16 layers. */
+const MAX_SEPARATED_LAYERS = 16;
+/** What we ask for when the caller doesn't say. Matches the PRD's worked
+ *  example and keeps a default request cheap. */
+const DEFAULT_SEPARATED_LAYERS = 10;
+
+function layerPrompt(p: LayerGenParams): string {
+  const explicit = p.instruction?.trim();
+  if (explicit) return explicit;
+  if (p.mode === "region") return "Separate the element inside the red box.";
+  const raw = p.maxLayers ?? DEFAULT_SEPARATED_LAYERS;
+  // Clamp rather than reject: this is a prompt, not a validated parameter, and
+  // "up to 0 layers" or "up to 1e9 layers" is a worse ask than a sane number.
+  const n = Math.min(
+    MAX_SEPARATED_LAYERS,
+    Math.max(1, Math.round(Number.isFinite(raw) ? raw : DEFAULT_SEPARATED_LAYERS)),
+  );
+  return `Please split the reference image into up to ${n} layers.`;
+}
+
+export async function separateLayers(
+  p: LayerGenParams,
+  apiKey?: string,
+): Promise<ImageGenResponse> {
+  const body: Record<string, unknown> = {
+    model: resolveModel(p.model ?? IMAGE_MODEL),
+    response_format: "url",
+    watermark: false,
+    image: p.image,
+    prompt: layerPrompt(p),
+  };
+  // Unlike generateImage we do NOT default a size. Layer PNGs are only useful
+  // if they line up with the source, so an unrequested "2048x2048" would be
+  // actively wrong; omitting lets the model track the input.
+  if (p.size) body.size = p.size;
+  if (p.seed !== undefined) body.seed = p.seed;
+  // No `sequential_image_generation` here even though this returns many
+  // images: the preview docs describe the multi-entry response as intrinsic to
+  // the split, and max_images caps at 15 — below the 17 entries this can
+  // return. If upstream later requires the flag it goes here.
   return request<ImageGenResponse>("/images/generations", {
     method: "POST",
     body: JSON.stringify(body),
@@ -758,6 +898,153 @@ export function buildComposeCurl(p: ComposePromptParams): string {
     `  -H 'Content-Type: application/json' \\`,
     `  -d '${json}'`,
   ].join("\n");
+}
+
+// ---------- Tool-calling chat (agent loop) ----------
+/**
+ * Multi-turn chat with tool calling, for the Edit tab's agent.
+ *
+ * Uses `/chat/completions` — the OpenAI-compatible shape — rather than
+ * `/responses`, even though shouldUseResponsesApi() routes seed-2-0-pro to
+ * the latter for prompt writing. Tool calling is documented against
+ * chat/completions, the `tool_calls` / `role:"tool"` round trip is the shape
+ * every OpenAI-compatible client already speaks, and the agent loop needs a
+ * stable multi-turn transcript rather than a one-shot completion.
+ *
+ * Unlike the other helpers here this one does NOT own its prompt. The caller
+ * passes the whole transcript, because the loop lives on the client (the edit
+ * session is in localStorage and the server can't see it) and this route is
+ * one stateless turn of it.
+ */
+export type ChatToolDef = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type ChatToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+/** Content blocks accepted on a user turn. Images ride as data URIs or
+ *  public https URLs, per the OpenAI vision shape. */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ChatMessage =
+  | { role: "system" | "user"; content: string | ChatContentPart[] }
+  | { role: "assistant"; content?: string | null; tool_calls?: ChatToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+export type ChatWithToolsParams = {
+  messages: ChatMessage[];
+  tools: ChatToolDef[];
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+};
+
+export type ChatWithToolsResult = {
+  /** The assistant's visible text, if any. Absent on a pure tool turn. */
+  content: string | null;
+  toolCalls: ChatToolCall[];
+  /** "tool_calls" when the model wants tools run; "stop" when it's done. */
+  finishReason: string | null;
+  usage?: Record<string, unknown>;
+};
+
+/**
+ * The model the EDITOR uses for language work — the agent and prompt
+ * enhancement.
+ *
+ * Pinned here rather than inheriting PROMPT_MODEL, which defaults to the Lite
+ * model and is shared with story-prompt generation. The editor's agent drives
+ * twelve tools and does coordinate arithmetic; Lite is not the right tier for
+ * that, and inheriting a default meant for something else meant the agent was
+ * silently running on Lite whenever BYTEPLUS_PROMPT_MODEL was unset — which
+ * is the case on a stock deployment.
+ *
+ * Override with BYTEPLUS_EDIT_MODEL if an account does not have Pro enabled.
+ */
+export const EDIT_MODEL =
+  process.env.BYTEPLUS_EDIT_MODEL ?? "seed-2-0-pro-260328";
+
+/**
+ * One text-in, text-out turn. No tools, no images.
+ *
+ * Separate from chatWithTools because `tools` is required there and an empty
+ * array is not the same request — some endpoints reject it, and `tool_choice`
+ * has no meaning without them.
+ */
+export async function chatText(
+  p: {
+    system: string;
+    user: string;
+    model?: string;
+    maxTokens?: number;
+    temperature?: number;
+  },
+  apiKey?: string,
+): Promise<string> {
+  const out = await request<{
+    choices?: Array<{ message?: { content?: string | null } }>;
+  }>(
+    "/chat/completions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: resolveModel(p.model ?? PROMPT_MODEL),
+        messages: [
+          { role: "system", content: p.system },
+          { role: "user", content: p.user },
+        ],
+        max_tokens: p.maxTokens ?? 1000,
+        ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
+      }),
+    },
+    apiKey,
+  );
+  return out.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+export async function chatWithTools(
+  p: ChatWithToolsParams,
+  apiKey?: string,
+): Promise<ChatWithToolsResult> {
+  const body = {
+    model: resolveModel(p.model ?? PROMPT_MODEL),
+    messages: p.messages,
+    tools: p.tools,
+    tool_choice: "auto",
+    max_tokens: p.maxTokens ?? 4096,
+    ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
+  };
+
+  const out = await request<{
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+        tool_calls?: ChatToolCall[];
+      };
+      finish_reason?: string;
+    }>;
+    usage?: Record<string, unknown>;
+  }>("/chat/completions", { method: "POST", body: JSON.stringify(body) }, apiKey);
+
+  const choice = out.choices?.[0];
+  return {
+    content: choice?.message?.content ?? null,
+    // Normalised to an array so callers never branch on undefined.
+    toolCalls: choice?.message?.tool_calls ?? [],
+    finishReason: choice?.finish_reason ?? null,
+    usage: out.usage,
+  };
 }
 
 // ---------- Video ----------

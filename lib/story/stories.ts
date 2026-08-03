@@ -13,7 +13,7 @@
  * edits the script structure.
  */
 
-import { userKey } from '@/lib/storage-user';
+import { subscribeStorageUser, userKey } from '@/lib/storage-user';
 
 const STORAGE_KEY = () => userKey("lumen.story.projects.v1");
 
@@ -123,6 +123,19 @@ export function subscribeStories(cb: Listener): () => void {
   return () => {
     listeners.delete(cb);
   };
+}
+
+/**
+ * The story list is read once and cached, and the first read on a hard page
+ * load happens before Clerk has resolved the user — so it reads the unscoped
+ * key and caches an empty list. Same race the edit store hit; see the note in
+ * lib/storage-user.ts.
+ */
+if (typeof window !== "undefined") {
+  subscribeStorageUser(() => {
+    cachedList = null;
+    listeners.forEach((cb) => cb());
+  });
 }
 
 export function getStoriesSnapshot(): StoryMeta[] {

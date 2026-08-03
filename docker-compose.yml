@@ -6,9 +6,39 @@ services:
       - "3000:3000"
     env_file:
       - .env.production
+    volumes:
+      # /app/public/library-cache holds two kinds of file, and losing either
+      # is user-visible:
+      #
+      #   · Mirrored CDN assets. /api/library/mirror copies BytePlus assets
+      #     here so the Library survives their signed URLs expiring. Without
+      #     a volume a redeploy throws them away and the Library fills with
+      #     broken thumbnails — the exact thing the mirror route exists to
+      #     prevent. docker-compose.local.yml has carried this fix for a
+      #     while; production never got it.
+      #
+      #   · Uploaded images. /api/library/upload writes here, and the image
+      #     editor stores the returned /library-cache/… path as a session's
+      #     BASE image. Edit sessions are long-lived by design, so on an
+      #     ephemeral filesystem every upload-seeded session is dead after
+      #     the next container replacement — the canvas renders empty and
+      #     Render fails with a load error.
+      #
+      # The Dockerfile creates this directory and chowns it to nextjs:nodejs
+      # before dropping privileges, so a freshly-created named volume
+      # inherits that ownership. A volume created by an OLDER image (before
+      # that chown existed) will still be root-owned and writes will fail
+      # with EACCES — fix that case with a one-off
+      # `docker compose run --rm --user root app chown -R nextjs:nodejs
+      # /app/public/library-cache` rather than by recreating the volume,
+      # which would discard the mirrored assets.
+      - library_cache:/app/public/library-cache
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
+
+volumes:
+  library_cache:

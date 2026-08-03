@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { Asset } from "@/lib/library/assets";
 import { removeAsset, updateAsset } from "@/lib/library/assets";
+import { startEditSessionFromUrl } from "@/lib/edit/start-session";
 import type { CreationEntry } from "@/lib/library/feed";
 import { AssetMedia } from "@/components/library/asset-media";
 import { BrandLogo, resolveModelBrand } from "@/components/ui/brand-logo";
@@ -46,6 +47,45 @@ function AssetRow({ asset }: { asset: Asset }) {
   const router = useRouter();
   const [busyPin, setBusyPin] = React.useState(false);
   const [busyDelete, setBusyDelete] = React.useState(false);
+  const [busyEdit, setBusyEdit] = React.useState(false);
+  const [editError, setEditError] = React.useState<string | null>(null);
+
+  /**
+   * Create an edit session seeded with this asset, then soft-navigate to it.
+   *
+   * Async because the session needs the image's intrinsic dimensions before
+   * it exists — coordinate normalization and output sizing both derive from
+   * them, so a ref without them is only half usable.
+   *
+   * Prefers the local mirror when there is one: it's same-origin, which is
+   * what the canvas needs once compositing lands, and it doesn't expire the
+   * way a signed CDN URL does.
+   */
+  async function onEdit(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busyEdit) return;
+    setBusyEdit(true);
+    setEditError(null);
+    try {
+      const session = await startEditSessionFromUrl({
+        url: asset.mirrorUrl ?? asset.url,
+        assetId: asset.id,
+        name: asset.title,
+      });
+      // Soft-nav, unlike onReusePrompt's hard navigation — /edit/[id] reads
+      // its state from the store, not from query params, so there's nothing
+      // for a full page load to hydrate.
+      router.push(`/edit/${session.id}`);
+    } catch (e) {
+      // Every failure here is one the user can act on — an expired signed
+      // URL, a mirror file that no longer exists, or a full localStorage
+      // (createEditSession throws by design in that case). Swallowing them
+      // leaves the pencil looking broken with no explanation, which is worse
+      // than the disabled "coming soon" pill this replaced.
+      setEditError(e instanceof Error ? e.message : "Could not open the editor.");
+      setBusyEdit(false);
+    }
+  }
 
   function onTogglePin(e: React.MouseEvent) {
     e.stopPropagation();
@@ -228,22 +268,39 @@ function AssetRow({ asset }: { asset: Asset }) {
             </IconButton>
           </div>
 
-          {/* Bottom-right action pills — Edit (placeholder) + Create
-              Video. Image kind only: Edit will eventually open an
-              inline edit drawer (placeholder for now); Create Video
+          {/* Bottom-right action pills — Edit + Create Video. Image kind
+              only: Edit opens this asset in the /edit canvas; Create Video
               hard-navigates to the Video tab with this image seeded
               into the i2v starting-frame slot. Sits on a separate row
               from the brand badge so they don't visually compete. */}
-          {asset.kind === "image" && (
+          {editError && (
+            <div className="absolute inset-x-2 bottom-2 rounded-[8px] bg-bg/90 px-2 py-1.5 backdrop-blur-sm">
+              <div className="flex items-start gap-2">
+                <span className="flex-1 text-[11px] leading-snug text-[oklch(0.72_0.22_15)]">
+                  {editError}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditError(null);
+                  }}
+                  className="shrink-0 font-mono text-[10px] text-ink-mute hover:text-ink"
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          {asset.kind === "image" && !editError && (
             <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-bg/85 p-1 opacity-0 transition-opacity backdrop-blur-sm group-hover:opacity-100 focus-within:opacity-100">
               <IconButton
-                label="Edit (coming soon)"
+                label={busyEdit ? "Opening editor…" : "Edit"}
+                disabled={busyEdit}
                 onClick={(e) => {
-                  e.stopPropagation();
-                  // Placeholder — surface stays disabled-looking via
-                  // disabled prop until the editor lands.
+                  void onEdit(e);
                 }}
-                disabled
               >
                 <Pencil className="size-3.5" />
               </IconButton>
