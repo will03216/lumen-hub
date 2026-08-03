@@ -26,6 +26,7 @@ import {
 } from "@/lib/studio/models";
 import { stageGeneratedImage } from "@/lib/library/auto-save";
 import { NodeShell } from "./node-shell";
+import { requestImage } from "@/lib/compare/request-image";
 import type { NodeTypeSpec, StudioNodeData } from "../types";
 
 export type StyleTransferForm = {
@@ -209,12 +210,7 @@ export const styleTransferSpec: NodeTypeSpec<StyleTransferForm> = {
     const seedNum = form.seed.trim() ? Number(form.seed) : NaN;
     if (Number.isFinite(seedNum)) body.seed = seedNum;
 
-    const res = await fetch("/api/image", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    });
+    const res = await requestImage(body, signal);
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error ?? "style transfer failed");
     const url: string | undefined = data?.data?.[0]?.url;

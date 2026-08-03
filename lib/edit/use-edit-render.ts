@@ -23,6 +23,7 @@
 
 import * as React from "react";
 import { classifyError, type ErrorClass } from "@/lib/compare/error-class";
+import { requestImage } from "@/lib/compare/request-image";
 import { stageGeneratedImage } from "@/lib/library/auto-save";
 import { modelMaxPixels } from "@/lib/studio/models";
 import {
@@ -378,18 +379,16 @@ export function useEditRender(sessionId: string) {
       const image = await resolveWireImages(req);
       if (ctrl.signal.aborted) return;
 
-      const res = await fetch("/api/image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await requestImage(
+        {
           prompt: req.prompt,
           model: req.model,
           size: req.size,
           seed: req.seed,
           image,
-        }),
-        signal: ctrl.signal,
-      });
+        },
+        ctrl.signal,
+      );
 
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
 

@@ -17,6 +17,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { classifyError, type ErrorClass } from "./error-class";
+import { requestImage } from "./request-image";
 
 export type RenderedImage = { url: string; size?: string };
 
@@ -89,12 +90,7 @@ export function useImageRender() {
 
       let responseStatus: number | undefined;
       try {
-        const res = await fetch("/api/image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(params),
-          signal: ctrl.signal,
-        });
+        const res = await requestImage(params, ctrl.signal);
         responseStatus = res.status;
         const data = await res.json();
         if (!res.ok) {

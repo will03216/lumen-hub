@@ -27,6 +27,7 @@ import {
 } from "@/lib/studio/models";
 import { stageGeneratedImage } from "@/lib/library/auto-save";
 import { NodeShell } from "./node-shell";
+import { requestImage } from "@/lib/compare/request-image";
 import type { NodeTypeSpec, StudioNodeData } from "../types";
 
 export type CompareForm = {
@@ -205,12 +206,7 @@ async function renderOne(params: {
   };
   if (params.seed !== undefined) body.seed = params.seed;
 
-  const res = await fetch("/api/image", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: params.signal,
-  });
+  const res = await requestImage(body, params.signal);
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error ?? "image render failed");
   const url: string | undefined = data?.data?.[0]?.url;
