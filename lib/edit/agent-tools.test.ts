@@ -82,11 +82,17 @@ function session(over: Partial<EditSession> = {}): EditSession {
 function plan(
   name: string,
   input: unknown,
-  opts: { session?: EditSession; scale?: number } = {},
+  opts: { session?: EditSession; scale?: number; scales?: Record<string, number> } = {},
 ): PlanResult {
   return planToolCall(name, input, {
     session: opts.session ?? session(),
-    scale: opts.scale ?? 1,
+    // One scale for every reference unless a test needs them to differ —
+    // `scale` is the common case, `scales` the per-reference one.
+    scales:
+      opts.scales ??
+      Object.fromEntries(
+        (opts.session ?? session()).refs.map((r) => [r.id, opts.scale ?? 1]),
+      ),
   });
 }
 
@@ -102,7 +108,7 @@ function err(result: PlanResult): string {
 }
 
 type Described = {
-  coordinateSpace: { scale: number; note: string };
+  coordinateSpace: { note: string };
   instruction: string;
   activeRefId: string | null;
   refs: Array<{
@@ -110,6 +116,7 @@ type Described = {
     index: number;
     width: number;
     height: number;
+    shownAtScale: number;
     annotationCount: number;
     annotations: Array<Record<string, unknown>>;
   }>;
@@ -117,7 +124,10 @@ type Described = {
 };
 
 function described(s: EditSession, scale: number): Described {
-  return describeSession(s, scale) as Described;
+  return describeSession(
+    s,
+    Object.fromEntries(s.refs.map((r) => [r.id, scale])),
+  ) as Described;
 }
 
 // ─────────────────────────── Tool definitions ─────────────────────────────
@@ -572,7 +582,7 @@ describe("purity", () => {
 
     ok(plan("place_box", input, { session: s, scale: 0.5 }));
     ok(plan("clear_annotations", { refId: "ref-a" }, { session: s }));
-    describeSession(s, 0.5);
+    describeSession(s, { "ref-a": 0.5 });
 
     expect(JSON.stringify(s)).toBe(before);
     expect(JSON.stringify(input)).toBe(inputBefore);
@@ -596,15 +606,83 @@ function deepFreeze<T>(value: T): T {
 
 // ─────────────────────────── describeSession ──────────────────────────────
 
+describe("per-reference scales", () => {
+  // The bug this prevents: one scale for the whole session. A 4000px base and
+  // a 600px style reference downscale by wildly different amounts, so a single
+  // factor puts every mark on the second image in the wrong place while the
+  // first looks perfect — and the blame lands on the model's eyesight.
+  const two = () =>
+    session({
+      refs: [
+        ref({ id: "big", width: 4000, height: 4000 }),
+        ref({ id: "small", width: 600, height: 600, role: "style" }),
+      ],
+      activeRefId: "big",
+    });
+  const scales = { big: 0.5, small: 1 };
+
+  it("uses the factor of the reference being marked, not the first one", () => {
+    const onSmall = ok(
+      plan("place_point", { refId: "small", x: 300, y: 300 }, { session: two(), scales }),
+    );
+    // scale 1 → straight through. Under the old shared factor (0.5) this
+    // landed at 600,600 — the far corner of a 600px image.
+    expect(onSmall).toMatchObject({
+      refId: "small",
+      draft: { kind: "point", at: { x: 300, y: 300 } },
+    });
+
+    const onBig = ok(
+      plan("place_point", { refId: "big", x: 300, y: 300 }, { session: two(), scales }),
+    );
+    expect(onBig).toMatchObject({ draft: { at: { x: 600, y: 600 } } });
+  });
+
+  it("scales a box on the second reference by its own factor", () => {
+    const p = ok(
+      plan(
+        "place_box",
+        { refId: "small", x: 100, y: 100, w: 200, h: 200 },
+        { session: two(), scales: { big: 0.25, small: 0.5 } },
+      ),
+    );
+    expect(p).toMatchObject({
+      refId: "small",
+      draft: { kind: "box", rect: { x: 200, y: 200, w: 400, h: 400 } },
+    });
+  });
+
+  it("describes each reference in its own space", () => {
+    const view = describeSession(two(), scales) as Described;
+    expect(view.refs[0]).toMatchObject({ width: 2000, shownAtScale: 0.5 });
+    expect(view.refs[1]).toMatchObject({ width: 600, shownAtScale: 1 });
+  });
+
+  it("treats a reference the harness never showed as un-downscaled", () => {
+    // A ref beyond the vision cap is described at scale 1 and marked at scale
+    // 1, which is at least self-consistent — the model can only have got its
+    // coordinates from inspect_session, which reported that same space.
+    const p = ok(
+      plan("place_point", { refId: "small", x: 42, y: 42 }, { session: two(), scales: { big: 0.5 } }),
+    );
+    expect(p).toMatchObject({ draft: { at: { x: 42, y: 42 } } });
+  });
+});
+
 describe("describeSession", () => {
   it("reports dimensions in the space the model answers in", () => {
     const view = described(session(), 0.5);
-    expect(view.refs[0]).toMatchObject({ id: "ref-a", index: 1, width: 500, height: 400 });
-    expect(view.coordinateSpace.scale).toBe(0.5);
+    expect(view.refs[0]).toMatchObject({
+      id: "ref-a",
+      index: 1,
+      width: 500,
+      height: 400,
+      shownAtScale: 0.5,
+    });
   });
 
   it("normalizes a broken scale the same way planToolCall does", () => {
-    expect(described(session(), 0).coordinateSpace.scale).toBe(1);
+    expect(described(session(), 0).refs[0].shownAtScale).toBe(1);
     expect(described(session(), 0).refs[0].width).toBe(1000);
   });
 

@@ -32,7 +32,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, RotateCcw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEditAgent, type ChatEntry } from "@/lib/edit/use-edit-agent";
 import { cn } from "@/lib/utils";
@@ -49,7 +49,7 @@ export function AgentPanel({
     opts: { refId?: string; mode?: "auto" | "region" },
   ) => Promise<{ ok: boolean; message: string }>;
 }) {
-  const { entries, send, busy, pending, resolveApproval, needsKey } =
+  const { entries, send, busy, pending, resolveApproval, reset, needsKey } =
     useEditAgent(sessionId, { onRender, onSeparateLayers });
   const [draft, setDraft] = React.useState("");
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -74,6 +74,20 @@ export function AgentPanel({
         <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim">
           Agent
         </span>
+        {entries.length > 0 && (
+          // The transcript is the model's entire memory and only grows. A
+          // conversation that has gone somewhere unhelpful used to need a page
+          // reload to escape; this also re-shows the images as they are now.
+          <button
+            onClick={reset}
+            disabled={busy}
+            title="Clear the conversation and start from the current canvas"
+            className="ml-auto inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute transition-colors hover:text-ink disabled:opacity-30"
+          >
+            <RotateCcw className="size-3" />
+            New chat
+          </button>
+        )}
       </div>
 
       <div

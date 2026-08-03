@@ -34,6 +34,7 @@ import {
   describeSession,
   planToolCall,
   requiresApproval,
+  type ScaleMap,
   type ToolPlan,
 } from "./agent-tools";
 import { buildAnnotation } from "./annotations";
@@ -65,6 +66,15 @@ const VISION_LONG_EDGE = 2576;
 /** Stop runaway loops. Each iteration is a paid model call. */
 const MAX_TURNS = 12;
 
+/**
+ * How many references the model is shown.
+ *
+ * Each is ~4,800 input tokens on the turn it is attached. Four covers a base
+ * plus a subject, a style and a sketch — the fusion cases §5C is built for —
+ * without turning a ten-reference session into a 50k-token opening turn.
+ */
+const MAX_VISION_REFS = 4;
+
 /** Give up on one turn rather than showing "Thinking…" indefinitely. The
  *  route allows 300s; a turn that has taken two minutes is not coming back
  *  with anything useful. */
@@ -80,6 +90,36 @@ const TURN_TIMEOUT_MS = 120_000;
  */
 function visionScale(w: number, h: number): number {
   return Math.min(1, VISION_LONG_EDGE / (Math.max(w, h) || 1));
+}
+
+/**
+ * The sentence that goes with a fresh batch of attachments.
+ *
+ * Without it the model gets N pictures and no way to tell which is the base
+ * and which is the style reference — it would have to guess from content, and
+ * on a re-attach it would not know why it is being shown them again. Says what
+ * it cannot see, too: silence about the hidden ones reads as "that is
+ * everything".
+ */
+function describeAttachments(
+  images: Array<{ index: number; role: string; label?: string }>,
+  hidden: number,
+  isUpdate: boolean,
+): string {
+  const list = images
+    .map(
+      (im) =>
+        `image ${im.index} — ${im.role}${im.label ? ` (${im.label})` : ""}`,
+    )
+    .join("; ");
+  const lead = isUpdate
+    ? "The references changed. These are the current ones, replacing what you were shown before:"
+    : "Attached:";
+  const tail =
+    hidden > 0
+      ? ` ${hidden} further reference${hidden === 1 ? " is" : "s are"} attached to the request but not shown to you.`
+      : "";
+  return `${lead} ${list}. Coordinates for each are in that image's own pixel space.${tail}`;
 }
 
 /** Re-encode an image at vision scale. Clean — no markup burned in. */
@@ -176,6 +216,8 @@ export function useEditAgent(
   const wireRef = React.useRef<ChatMessage[]>([]);
   // Resolver for the approval gate — the loop awaits this promise.
   const approvalRef = React.useRef<((ok: boolean) => void) | null>(null);
+  /** Signature of the image set the model has actually been shown. */
+  const shownRef = React.useRef<string | null>(null);
   const onRenderRef = React.useRef(opts.onRender);
   onRenderRef.current = opts.onRender;
   const onSeparateRef = React.useRef(opts.onSeparateLayers);
@@ -186,7 +228,16 @@ export function useEditAgent(
   }, []);
 
   /**
-   * Downscale the base image to the vision tier.
+   * Downscale EVERY reference to the vision tier.
+   *
+   * It used to be the base image only, which meant the agent could read that a
+   * style reference existed and describe its role, but never see it — it could
+   * not tell you the bottle in reference 2 is the wrong shade, and any mark it
+   * placed there was aimed blind.
+   *
+   * Each image keeps its OWN scale factor, because a 4000px base and a 600px
+   * subject reference downscale by wildly different amounts and one shared
+   * factor would land every mark on the second image in the wrong place.
    *
    * maxPixels is derived from the long edge rather than passed directly:
    * a 4000x1000 image is only 4 MP, so a pixel-count cap alone would leave
@@ -194,14 +245,41 @@ export function useEditAgent(
    */
   const snapshot = React.useCallback(async () => {
     const session = getEditSession(sessionId);
-    const ref = session?.refs[0];
-    if (!session || !ref) return null;
-    const dataUrl = await toVisionImage(
-      ref.safeUrl ?? ref.url,
-      ref.width,
-      ref.height,
+    if (!session || session.refs.length === 0) return null;
+
+    // Every attached image is ~4,800 input tokens on the turn it goes in, so
+    // the set is capped. Beyond the cap the model is told what it cannot see
+    // rather than being left to assume it has seen everything.
+    const shown = session.refs.slice(0, MAX_VISION_REFS);
+    const images = await Promise.all(
+      shown.map(async (ref, i) => ({
+        refId: ref.id,
+        index: i + 1,
+        role: ref.role,
+        label: ref.label,
+        dataUrl: await toVisionImage(
+          ref.safeUrl ?? ref.url,
+          ref.width,
+          ref.height,
+        ),
+      })),
     );
-    return { dataUrl, scale: visionScale(ref.width, ref.height), session };
+
+    const scales: Record<string, number> = {};
+    for (const ref of shown) {
+      scales[ref.id] = visionScale(ref.width, ref.height);
+    }
+
+    return {
+      images,
+      scales,
+      session,
+      hidden: session.refs.length - shown.length,
+      /** Identity of the image set, so a changed base or a new reference
+       *  re-attaches instead of leaving the model looking at last week's
+       *  picture. */
+      signature: shown.map((r) => `${r.id}:${r.url}:${r.width}x${r.height}`).join("|"),
+    };
   }, [sessionId]);
 
   /**
@@ -215,13 +293,13 @@ export function useEditAgent(
 
   /** Apply one planned tool call. Returns the text handed back to the model. */
   const apply = React.useCallback(
-    async (plan: ToolPlan, scale: number): Promise<ToolOutcome> => {
+    async (plan: ToolPlan, scales: ScaleMap): Promise<ToolOutcome> => {
       const session = getEditSession(sessionId);
       if (!session) return { text: "The session no longer exists." };
 
       switch (plan.kind) {
         case "inspect":
-          return { text: JSON.stringify(describeSession(session, scale)) };
+          return { text: JSON.stringify(describeSession(session, scales)) };
 
         case "preview_prompt":
           return { text: buildEditRequest(session).prompt || "(empty)" };
@@ -366,7 +444,7 @@ export function useEditAgent(
   );
 
   const runLoop = React.useCallback(
-    async (scale: number) => {
+    async (scales: ScaleMap) => {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         let res: Response;
         try {
@@ -472,7 +550,7 @@ export function useEditAgent(
             continue;
           }
 
-          const planned = planToolCall(name, input, { session, scale });
+          const planned = planToolCall(name, input, { session, scales });
           if (!planned.ok) {
             push({ kind: "tool", name, summary: planned.error, status: "error" });
             results.push({
@@ -517,7 +595,7 @@ export function useEditAgent(
           }
 
           try {
-            const outcome = await apply(planned.plan, scale);
+            const outcome = await apply(planned.plan, scales);
             const text = outcome.text;
             if (outcome.image) followUpImages.push(outcome.image);
             setEntries((prev) =>
@@ -592,24 +670,35 @@ export function useEditAgent(
           return;
         }
 
-        // The image goes in once, on the opening turn, and stays in the
-        // transcript from there. Re-attaching it every turn would re-bill the
-        // same pixels on each round trip of a multi-step edit.
-        const first = wireRef.current.length === 0;
+        // Images go in when they are new, not on every turn: re-attaching the
+        // same pixels each round trip would re-bill them on a multi-step edit.
+        // But "once, ever" was wrong — swap the base image mid-conversation
+        // and the model kept answering about the picture it saw first, with
+        // nothing on screen to suggest it was looking at the wrong thing.
+        const changed = shownRef.current !== snap.signature;
+        shownRef.current = snap.signature;
+
+        const preamble = changed
+          ? describeAttachments(snap.images, snap.hidden, wireRef.current.length > 0)
+          : "";
+
         wireRef.current = [
           ...wireRef.current,
           {
             role: "user",
-            content: first
+            content: changed
               ? [
-                  { type: "image_url", image_url: { url: snap.dataUrl } },
-                  { type: "text", text: trimmed },
+                  ...snap.images.map((im) => ({
+                    type: "image_url" as const,
+                    image_url: { url: im.dataUrl },
+                  })),
+                  { type: "text" as const, text: `${preamble}\n\n${trimmed}` },
                 ]
-              : [{ type: "text", text: trimmed }],
+              : [{ type: "text" as const, text: trimmed }],
           },
         ];
 
-        await runLoop(snap.scale);
+        await runLoop(snap.scales);
       } catch (e) {
         push({ kind: "error", text: e instanceof Error ? e.message : String(e) });
       } finally {
@@ -623,5 +712,24 @@ export function useEditAgent(
     approvalRef.current?.(ok);
   }, []);
 
-  return { entries, send, busy, pending, resolveApproval, needsKey };
+  /**
+   * Start over.
+   *
+   * The transcript is the model's whole memory, and it grows monotonically —
+   * every mark it placed, every render it judged, every correction. On a long
+   * session that is both expensive and a liability: a conversation that has
+   * gone somewhere unhelpful stays gone until the page is reloaded. Clearing
+   * `shownRef` too means the next message re-attaches the images, so the fresh
+   * conversation starts from what is on the canvas NOW.
+   */
+  const reset = React.useCallback(() => {
+    wireRef.current = [];
+    shownRef.current = null;
+    approvalRef.current = null;
+    setEntries([]);
+    setPending(null);
+    setBusy(false);
+  }, []);
+
+  return { entries, send, busy, pending, resolveApproval, reset, needsKey };
 }

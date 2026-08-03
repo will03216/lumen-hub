@@ -17,16 +17,20 @@
  *
  * THREE RULES THIS FILE EXISTS TO ENFORCE.
  *
- * 1. THE COORDINATE RESCALE. The model returns coordinates that map 1:1 to the
- *    pixels of the image it was *shown*, and the harness downscales the canvas
- *    snapshot to fit a 2576px long-edge vision budget. So every incoming
- *    coordinate is in snapshot space and must be divided by `scale` before it
- *    reaches the store, which holds image-intrinsic pixels (see the geometry
- *    invariant at the top of types.ts). Miss this and every agent mark is
- *    consistently offset by the same factor — the worst failure mode available,
- *    because a mark that is 40% off looks exactly like a model that aimed badly.
- *    `describeSession` reports dimensions multiplied by the same `scale`, so the
- *    numbers the model reads and the numbers it writes are in one space.
+ * 1. THE COORDINATE RESCALE, PER REFERENCE. The model returns coordinates that
+ *    map 1:1 to the pixels of the image it was *shown*, and the harness
+ *    downscales each snapshot to fit a 2576px long-edge vision budget. So every
+ *    incoming coordinate is in that image's snapshot space and must be divided
+ *    by ITS OWN factor before it reaches the store, which holds image-intrinsic
+ *    pixels (see the geometry invariant at the top of types.ts).
+ *
+ *    Per reference, not one factor for the session: a 4000px base and a 600px
+ *    subject reference downscale by wildly different amounts, and a single
+ *    factor would land every mark on the second image in the wrong place while
+ *    the first looked perfect — which is the kind of bug that gets blamed on
+ *    the model. `describeSession` reports each reference's dimensions in that
+ *    reference's own space, so the numbers the model reads and the numbers it
+ *    writes are always in one space.
  *
  * 2. AGENT MARKS GO THROUGH THE HUMAN PATH. `place_*` produces a
  *    `DraftAnnotation` — the exact shape a finished canvas gesture produces —
@@ -490,20 +494,30 @@ const REF_ROLES: readonly EditRefRole[] = ["base", "subject", "style", "sketch"]
 const MAX_LAYERS_CEILING = 10;
 
 /**
+ * Snapshot scale per reference id: snapshot_px = image_px * scale.
+ *
+ * A missing entry means "not downscaled" — the honest default for a reference
+ * the harness never showed the model, whose coordinates can only have come
+ * from `inspect_session`, which reports it at scale 1.
+ */
+export type ScaleMap = Readonly<Record<string, number>>;
+
+export type PlanContext = { session: EditSession; scales: ScaleMap };
+
+/**
  * Validate + interpret one tool call. Pure: it reads `ctx.session` and returns
  * a description of a change, and never throws — a thrown error inside a tool
  * loop kills the turn, whereas an `error` string goes back as a tool_result and
  * the model corrects itself on the next turn. That is why every message below
  * is written as an instruction the model can act on.
  *
- * `scale` is the snapshot scale factor: snapshot_px = image_px * scale. Every
- * coordinate that arrives here is in snapshot space and leaves in intrinsic
- * space. See rule 1 in the header.
+ * Every coordinate that arrives here is in the snapshot space of the reference
+ * it targets and leaves in intrinsic space. See rule 1 in the header.
  */
 export function planToolCall(
   name: string,
   input: unknown,
-  ctx: { session: EditSession; scale: number },
+  ctx: PlanContext,
 ): PlanResult {
   try {
     return { ok: true, plan: interpret(name, input, ctx) };
@@ -519,18 +533,16 @@ export function planToolCall(
   }
 }
 
-function interpret(
-  name: string,
-  input: unknown,
-  ctx: { session: EditSession; scale: number },
-): ToolPlan {
+function interpret(name: string, input: unknown, ctx: PlanContext): ToolPlan {
   if (!isToolName(name)) {
     fail(`Unknown tool \`${name}\`. Available tools: ${TOOL_NAMES.join(", ")}.`);
   }
 
   const args = asObject(name, input);
   const { session } = ctx;
-  const scale = effectiveScale(ctx.scale);
+  /** The factor for whichever reference this call targets. Resolved after the
+   *  ref is known, because there is no session-wide answer. */
+  const scaleOf = (refId: string) => effectiveScale(ctx.scales[refId]);
 
   switch (name) {
     case "inspect_session":
@@ -548,7 +560,7 @@ function interpret(
         reqNumber(args, "x", name),
         reqNumber(args, "y", name),
         ref,
-        scale,
+        scaleOf(ref.id),
       );
       return {
         kind: "annotation.add",
@@ -581,14 +593,15 @@ function interpret(
       // it keeps the region's outer boundary correct, which is what a bbox tag
       // is read against. Deriving w from a rounded origin drifts a pixel at a
       // time as the box moves right.
+      const s = scaleOf(ref.id);
       const [x1, x2] = clampSpan(
-        toIntrinsic(x, scale),
-        toIntrinsic(x + w, scale),
+        toIntrinsic(x, s),
+        toIntrinsic(x + w, s),
         ref.width,
       );
       const [y1, y2] = clampSpan(
-        toIntrinsic(y, scale),
-        toIntrinsic(y + h, scale),
+        toIntrinsic(y, s),
+        toIntrinsic(y + h, s),
         ref.height,
       );
 
@@ -602,17 +615,18 @@ function interpret(
 
     case "place_arrow": {
       const ref = requireRef(session, args, name);
+      const s = scaleOf(ref.id);
       const from = toIntrinsicPoint(
         reqNumber(args, "fromX", name),
         reqNumber(args, "fromY", name),
         ref,
-        scale,
+        s,
       );
       const to = toIntrinsicPoint(
         reqNumber(args, "toX", name),
         reqNumber(args, "toY", name),
         ref,
-        scale,
+        s,
       );
       const intent = reqEnum(args, "intent", ARROW_INTENTS, name);
       return {
@@ -716,26 +730,27 @@ function interpret(
 /**
  * A compact JSON view of the session, for the `inspect_session` tool result.
  *
- * EVERY DIMENSION AND COORDINATE IS MULTIPLIED BY `scale`, so what the model
- * reads here is in the same space as the snapshot it is looking at and the same
- * space `planToolCall` expects back. Reporting intrinsic pixels instead would
- * hand the model a coordinate system nobody showed it, and it would aim
- * confidently into empty space — with `scale` typically well under 1, off the
- * bottom-right of the frame.
+ * EVERY DIMENSION AND COORDINATE IS MULTIPLIED BY THAT REFERENCE'S OWN SCALE,
+ * so what the model reads for image N is in the same space as the snapshot of
+ * image N it is looking at, and the same space `planToolCall` expects back for
+ * that image. Reporting intrinsic pixels instead would hand the model a
+ * coordinate system nobody showed it, and it would aim confidently into empty
+ * space — with a scale typically well under 1, off the bottom-right of the
+ * frame. Reporting ONE scale for a set of differently-sized references has the
+ * same effect on every image but the first.
  *
  * Deliberately not a full dump. It is re-sent on every subsequent turn as part
  * of the transcript, so brush point arrays (hundreds of numbers each) are
  * reduced to a count and a bounding box: the model can see where a stroke is
  * without paying for its vertices on every turn thereafter.
  */
-export function describeSession(session: EditSession, scale: number): unknown {
-  const s = effectiveScale(scale);
+export function describeSession(session: EditSession, scales: ScaleMap): unknown {
   return {
     coordinateSpace: {
-      scale: s,
       note:
-        "All widths, heights and coordinates below are in the pixel space of the image you " +
-        "were shown. Give coordinates back in this same space.",
+        "Each reference below is described in the pixel space of the image you were shown for " +
+        "THAT reference — its own width and height, not the session's. Give coordinates back " +
+        "in the space of whichever reference you are marking.",
     },
     instruction: session.instruction,
     model: session.model,
@@ -744,18 +759,26 @@ export function describeSession(session: EditSession, scale: number): unknown {
     seed: session.seed,
     activeRefId: session.activeRefId,
     maxAnnotationsPerRef: MAX_ANNOTATIONS_PER_REF,
-    refs: session.refs.map((ref, i) => ({
-      id: ref.id,
-      // 1-based, matching the position the compiled prompt refers to images by
-      // ("image 1"). Not an array index — see CompileRef in annotation-prompt.ts.
-      index: i + 1,
-      role: ref.role,
-      label: ref.label,
-      width: Math.round(ref.width * s),
-      height: Math.round(ref.height * s),
-      annotationCount: ref.annotations.length,
-      annotations: ref.annotations.map((a) => describeAnnotation(a, s)),
-    })),
+    refs: session.refs.map((ref, i) => {
+      const s = effectiveScale(scales[ref.id]);
+      return {
+        id: ref.id,
+        // 1-based, matching the position the compiled prompt refers to images
+        // by ("image 1"). Not an array index — see CompileRef in
+        // annotation-prompt.ts.
+        index: i + 1,
+        role: ref.role,
+        label: ref.label,
+        width: Math.round(ref.width * s),
+        height: Math.round(ref.height * s),
+        // Stated per reference so a model that wants to reason about the
+        // mapping can, and so a wrong one is visible in the transcript rather
+        // than only in the marks it produces.
+        shownAtScale: s,
+        annotationCount: ref.annotations.length,
+        annotations: ref.annotations.map((a) => describeAnnotation(a, s)),
+      };
+    }),
     versions: session.versions.map((v) => ({
       id: v.id,
       createdAt: v.createdAt,
