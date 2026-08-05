@@ -50,7 +50,7 @@ import {
   upsertAnnotation,
 } from "./sessions";
 import { buildEditRequest } from "./use-edit-render";
-import { MARKER_COLOR } from "./types";
+import { MARKER_COLOR, type Annotation } from "./types";
 
 /**
  * Long-edge budget for the snapshot we show the model.
@@ -120,6 +120,27 @@ function describeAttachments(
       ? ` ${hidden} further reference${hidden === 1 ? " is" : "s are"} attached to the request but not shown to you.`
       : "";
   return `${lead} ${list}. Coordinates for each are in that image's own pixel space.${tail}`;
+}
+
+/**
+ * One mark, as numbers, in the space the model works in.
+ *
+ * Pairs with the preview image: the picture shows that a box is in the wrong
+ * place, and this says where it actually is, so a correction can be arithmetic
+ * rather than a second guess.
+ */
+function describeGeometry(a: Annotation, scale: number): string {
+  const r = (v: number) => Math.round(v * scale);
+  switch (a.kind) {
+    case "point":
+      return `${a.label} at (${r(a.at.x)}, ${r(a.at.y)})`;
+    case "box":
+      return `${a.label} spans x ${r(a.rect.x)}-${r(a.rect.x + a.rect.w)}, y ${r(a.rect.y)}-${r(a.rect.y + a.rect.h)}`;
+    case "arrow":
+      return `${a.label} from (${r(a.from.x)}, ${r(a.from.y)}) to (${r(a.to.x)}, ${r(a.to.y)})`;
+    default:
+      return `${a.label} (brush stroke)`;
+  }
 }
 
 /** Re-encode an image at vision scale. Clean — no markup burned in. */
@@ -330,11 +351,19 @@ export function useEditAgent(
             mimeType: "image/jpeg",
             quality: 0.85,
           });
+          // The numbers go back with the picture. Seeing that a box is wrong
+          // is not the same as knowing where it currently is, and a model
+          // asked to "move it down" without its own coordinates in front of it
+          // re-estimates from scratch — which is how a correction lands
+          // further from the target than the original.
+          const w = Math.round(ref.width * s);
+          const h = Math.round(ref.height * s);
+          const geometry = visible.map((a) => describeGeometry(a, s)).join("; ");
           return {
             text:
               visible.length === 0
-                ? "No marks on this reference yet — the attached image is the grid alone, which you can use to read off coordinates before placing anything."
-                : `${visible.length} mark${visible.length === 1 ? "" : "s"} drawn on the attached image, over a grid labelled in the same coordinates you send. Check each one is ON the thing you meant; if not, clear_annotations and place it again.`,
+                ? `No marks on this reference yet. The attached image is ${w}x${h} with grid lines every ${Math.round(w / 10)} across and ${Math.round(h / 10)} down — read the target's edges off those lines before placing anything.`
+                : `${visible.length} mark${visible.length === 1 ? "" : "s"} on the attached ${w}x${h} image, over a grid with lines every ${Math.round(w / 10)} across and ${Math.round(h / 10)} down. Currently: ${geometry}. Check each is ON the thing you meant. If not, clear_annotations and place it again IN THIS TURN, reading the object's edges off the grid lines rather than estimating again.`,
             image: dataUrl,
           };
         }

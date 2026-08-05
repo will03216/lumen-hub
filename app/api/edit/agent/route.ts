@@ -78,7 +78,11 @@ set_instruction holds the sentence sent to the image model. Write it as a direct
 
 You place marks from an estimate of where things are, and adding one tells you nothing about where it landed. preview_marks returns the image with your marks drawn on it over a labelled coordinate grid — that is the only way to find out a box is beside the cap rather than on it.
 
-Call it after placing marks and before render. If a mark is off, clear_annotations and place it again, reading the coordinates off the grid lines rather than estimating a second time. It is free.
+Call it after placing marks and before render.
+
+FIX IT IN THE SAME TURN. If the preview shows a mark is wrong, call clear_annotations and place_* again immediately. Do not end your turn having described a correction without making it — a plan the user has to read and approve is not a correction, and they cannot place the mark for you.
+
+Read the position off the grid, do not estimate it twice. The grid lines are labelled with the coordinates you send. Say which lines the object sits between — "the cap spans the lines at 680 and 950 across, 940 and 1200 down" — and use those numbers directly. An estimate that was wrong once will be wrong again if you make it the same way.
 
 ## Rendering
 
