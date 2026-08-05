@@ -35,6 +35,7 @@ import Link from "next/link";
 import { Loader2, RotateCcw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEditAgent, type ChatEntry } from "@/lib/edit/use-edit-agent";
+import { isSubmitKey, useAutoGrow } from "./use-auto-grow";
 import { cn } from "@/lib/utils";
 
 export function AgentPanel({
@@ -52,6 +53,7 @@ export function AgentPanel({
   const { entries, send, busy, pending, resolveApproval, reset, needsKey } =
     useEditAgent(sessionId, { onRender, onSeparateLayers });
   const [draft, setDraft] = React.useState("");
+  const draftRef = useAutoGrow<HTMLTextAreaElement>(draft, 140);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   // Keep the newest turn in view without yanking the page around it.
@@ -60,7 +62,7 @@ export function AgentPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [entries.length, pending]);
 
-  function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent | React.KeyboardEvent) {
     e.preventDefault();
     const text = draft;
     setDraft("");
@@ -148,13 +150,23 @@ export function AgentPanel({
           Add your BytePlus API key in Settings →
         </Link>
       ) : (
-        <form onSubmit={submit} className="flex gap-2">
-          <input
+        <form onSubmit={submit} className="flex items-end gap-2">
+          {/* A textarea, not an input: a one-line box hid everything but the
+              tail of an instruction while it was still being written. Grows to
+              five lines, then scrolls. */}
+          <textarea
+            ref={draftRef}
             value={draft}
             onChange={(ev) => setDraft(ev.target.value)}
+            onKeyDown={(ev) => {
+              if (!isSubmitKey(ev)) return;
+              ev.preventDefault();
+              submit(ev);
+            }}
             disabled={busy}
-            placeholder="Ask for an edit…"
-            className="min-w-0 flex-1 rounded-full border border-border bg-transparent px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-mute focus:border-ink-dim disabled:opacity-50"
+            rows={1}
+            placeholder="Ask for an edit…  (Shift+Enter for a new line)"
+            className="min-w-0 flex-1 resize-none rounded-[16px] border border-border bg-transparent px-3 py-2 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink-mute focus:border-ink-dim disabled:opacity-50"
           />
           <Button
             type="submit"

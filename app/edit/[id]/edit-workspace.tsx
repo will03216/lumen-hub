@@ -53,6 +53,7 @@ import { LayersPanel } from "./layers-panel";
 import { EnhanceButton } from "./enhance-button";
 import { PayloadInspector } from "./payload-inspector";
 import { RequestCurl } from "./request-curl";
+import { useAutoGrow } from "./use-auto-grow";
 import { VersionPrompt } from "./version-prompt";
 
 /** Kill switch for §5B. Set NEXT_PUBLIC_EDIT_LAYERS=0 to hide the panel. */
@@ -192,6 +193,12 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
   const instructionField = useDebouncedField(
     session?.instruction ?? "",
     (instruction) => updateEditSession(sessionId, { instruction }),
+  );
+  // Up to ~9 lines before it scrolls; past that the prompt bar starts eating
+  // the canvas, which is the thing you are describing.
+  const instructionRef = useAutoGrow<HTMLTextAreaElement>(
+    instructionField.value,
+    200,
   );
 
   // Two different "not yet"s. `mounted` is hydration; `storageReady` is Clerk
@@ -445,7 +452,11 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             is what they write into. §4's competitive read was that presets
             ARE the demo: an empty canvas is where a demo dies in the first
             thirty seconds. */}
+        {/* Grows with the instruction rather than hiding it. Enhance in
+            particular returns text longer than two lines, and a fixed box made
+            its own output unreadable. */}
         <textarea
+          ref={instructionRef}
           value={instructionField.value}
           onChange={(e) => instructionField.onChange(e.target.value)}
           onBlur={instructionField.flush}
