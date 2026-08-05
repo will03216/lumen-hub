@@ -157,6 +157,7 @@ export const TOOL_NAMES = [
   "separate_layers",
   "restore_version",
   "ask_user",
+  "preview_marks",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -439,6 +440,25 @@ export const EDIT_AGENT_TOOLS: readonly EditToolDef[] = [
       required: ["question"],
     },
   },
+  {
+    name: "preview_marks",
+    description:
+      "Look at where your marks actually landed. Returns the image with every mark drawn on it, " +
+      "over a coordinate grid, so you can compare what you placed against what you meant.\n\n" +
+      "USE IT AFTER PLACING MARKS AND BEFORE RENDERING. You place marks from an estimate and are " +
+      "told only that they were added — this is the only way to find out a box is sitting beside " +
+      "the object rather than on it. If a mark is wrong, clear_annotations and place it again " +
+      "using the grid lines to read off the coordinates. It is free and costs the user nothing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        refId: {
+          type: "string",
+          description: "Which reference to show. Defaults to the base image.",
+        },
+      },
+    },
+  },
 ];
 
 // ─────────────────────────── Plans ────────────────────────────────────────
@@ -470,6 +490,7 @@ export type ToolPlan =
   | { kind: "restore_version"; versionId: string }
   | { kind: "inspect" }
   | { kind: "preview_prompt" }
+  | { kind: "preview_marks"; refId: string }
   | { kind: "ask_user"; question: string; options?: string[] };
 
 export type PlanResult = { ok: true; plan: ToolPlan } | { ok: false; error: string };
@@ -550,6 +571,26 @@ function interpret(name: string, input: unknown, ctx: PlanContext): ToolPlan {
 
     case "preview_prompt":
       return { kind: "preview_prompt" };
+
+    case "preview_marks": {
+      // The ref is optional here, unlike the place_* tools: "show me what I
+      // did" should not fail because the model omitted an id it has only one
+      // candidate for.
+      const refId = optString(args, "refId", name);
+      const ref = refId
+        ? session.refs.find((r) => r.id === refId)
+        : session.refs[0];
+      if (!ref) {
+        fail(
+          refId
+            ? `refId ${q(refId)} not found; the session has: ${session.refs
+                .map((r) => q(r.id))
+                .join(", ")}.`
+            : "There are no references to preview.",
+        );
+      }
+      return { kind: "preview_marks", refId: ref.id };
+    }
 
     case "render":
       return { kind: "render" };

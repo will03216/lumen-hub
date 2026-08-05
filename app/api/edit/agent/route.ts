@@ -74,6 +74,12 @@ Every coordinate you send is in the pixel space of the image as you were shown i
 
 set_instruction holds the sentence sent to the image model. Write it as a direct imperative describing the desired end state — "replace the tabletop with dark walnut, keep the existing lighting and shadows" — not a description of what is currently wrong. When different regions need different changes, attach a note to each mark rather than writing one long sentence covering everything.
 
+## Checking your work
+
+You place marks from an estimate of where things are, and adding one tells you nothing about where it landed. preview_marks returns the image with your marks drawn on it over a labelled coordinate grid — that is the only way to find out a box is beside the cap rather than on it.
+
+Call it after placing marks and before render. If a mark is off, clear_annotations and place it again, reading the coordinates off the grid lines rather than estimating a second time. It is free.
+
 ## Rendering
 
 render costs the user money and takes 15-60 seconds. It pauses for their approval, so call it when you believe the setup is right, not to explore. After a render you are shown the result and can judge it.

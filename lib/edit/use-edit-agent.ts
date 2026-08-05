@@ -304,6 +304,41 @@ export function useEditAgent(
         case "preview_prompt":
           return { text: buildEditRequest(session).prompt || "(empty)" };
 
+        case "preview_marks": {
+          // The one thing the agent could not do: look at its own work.
+          //
+          // Marks are placed from a coordinate estimate and acknowledged with
+          // "Added Region 01", so a box that lands beside the object instead
+          // of on it is invisible to the model — it will happily go on to
+          // render, and the miss reads as the image model ignoring the region.
+          // Handing back the marked image over a labelled grid turns that into
+          // something it can see and correct.
+          const ref = session.refs.find((r) => r.id === plan.refId);
+          if (!ref) return { text: `No reference ${plan.refId}.` };
+          const visible = ref.annotations.filter((a) => !a.hidden);
+          const safe = resolveSafeUrl(ref.safeUrl ?? ref.url);
+          const s = visionScale(ref.width, ref.height);
+          const { dataUrl } = await renderComposite({
+            url: safe.url,
+            crossOrigin: safe.crossOrigin,
+            width: ref.width,
+            height: ref.height,
+            annotations: visible,
+            drawAll: true,
+            grid: true,
+            maxPixels: ref.width * ref.height * s * s,
+            mimeType: "image/jpeg",
+            quality: 0.85,
+          });
+          return {
+            text:
+              visible.length === 0
+                ? "No marks on this reference yet — the attached image is the grid alone, which you can use to read off coordinates before placing anything."
+                : `${visible.length} mark${visible.length === 1 ? "" : "s"} drawn on the attached image, over a grid labelled in the same coordinates you send. Check each one is ON the thing you meant; if not, clear_annotations and place it again.`,
+            image: dataUrl,
+          };
+        }
+
         case "annotation.add": {
           const ref = session.refs.find((r) => r.id === plan.refId);
           if (!ref) return { text: `No reference ${plan.refId}.` };

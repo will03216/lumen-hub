@@ -37,6 +37,7 @@ import type {
   ArrowAnnotation,
   BoxAnnotation,
   BrushAnnotation,
+  PointAnnotation,
 } from "./types";
 
 export type CompositeOpts = {
@@ -63,6 +64,27 @@ export type CompositeOpts = {
    * element inside the red box", so there the rectangle has to be visible.
    */
   drawBoxes?: boolean;
+  /**
+   * Draw EVERY mark, with its label — the VERIFICATION view, not the wire
+   * image.
+   *
+   * The wire image is deliberately clean for vector marks: they travel as
+   * coordinate tags, and painting them as well would show the model markup it
+   * is already being told about numerically. This is the opposite job. The
+   * agent places a box from a coordinate estimate, is told only "Added Region
+   * 01", and has no way to discover it landed 200px off the thing it meant.
+   * Rendering its own marks back to it is the only way it can self-correct.
+   */
+  drawAll?: boolean;
+  /**
+   * Overlay a labelled coordinate grid, in the same pixel space the caller is
+   * working in.
+   *
+   * Estimating "the cap starts about 700px across" from a bare photograph is
+   * the hard part of grounding, and a ruler makes it substantially easier —
+   * read the line, not the intention. Verification view only.
+   */
+  grid?: boolean;
   mimeType?: "image/jpeg" | "image/png";
   quality?: number;
 };
@@ -97,11 +119,18 @@ export async function renderComposite(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  if (opts.grid) drawGrid(ctx, w, h);
+
   for (const a of opts.annotations) {
     if (a.hidden) continue;
     if (a.kind === "brush") drawBrush(ctx, a, scale);
     else if (a.kind === "arrow") drawArrow(ctx, a, scale);
-    else if (a.kind === "box" && opts.drawBoxes) drawBox(ctx, a, scale);
+    else if (a.kind === "box" && (opts.drawBoxes || opts.drawAll)) {
+      drawBox(ctx, a, scale, opts.drawAll ? a.color : undefined);
+    } else if (a.kind === "point" && opts.drawAll) {
+      drawPoint(ctx, a, scale);
+    }
+    if (opts.drawAll) drawLabel(ctx, a, scale);
   }
 
   const mime = opts.mimeType ?? "image/jpeg";
@@ -152,14 +181,109 @@ function drawBox(
   ctx: CanvasRenderingContext2D,
   a: BoxAnnotation,
   scale: number,
+  color?: string,
 ): void {
   const r = normalizeRect(a.rect);
   ctx.save();
-  ctx.strokeStyle = REGION_BOX_COLOR;
+  ctx.strokeStyle = color ?? REGION_BOX_COLOR;
   // Scale the outline with the image so it stays visible after downscaling —
   // a hairline on a 4000px source disappears at vision scale.
   ctx.lineWidth = Math.max(2, (Math.max(ctx.canvas.width, ctx.canvas.height) / 300));
   ctx.strokeRect(r.x * scale, r.y * scale, r.w * scale, r.h * scale);
+  ctx.restore();
+}
+
+function drawPoint(
+  ctx: CanvasRenderingContext2D,
+  a: PointAnnotation,
+  scale: number,
+): void {
+  const r = Math.max(4, Math.min(ctx.canvas.width, ctx.canvas.height) / 110);
+  ctx.save();
+  ctx.fillStyle = a.color;
+  ctx.strokeStyle = "#0b0b0b";
+  ctx.lineWidth = Math.max(1, r / 5);
+  ctx.beginPath();
+  ctx.arc(a.at.x * scale, a.at.y * scale, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The mark's name, so the model can say "Region 01 is too high" rather than
+ *  describing a rectangle. */
+function drawLabel(
+  ctx: CanvasRenderingContext2D,
+  a: Annotation,
+  scale: number,
+): void {
+  const anchor =
+    a.kind === "box"
+      ? { x: normalizeRect(a.rect).x * scale, y: normalizeRect(a.rect).y * scale }
+      : a.kind === "point"
+        ? { x: a.at.x * scale + 10, y: a.at.y * scale }
+        : a.kind === "arrow"
+          ? { x: a.from.x * scale, y: a.from.y * scale }
+          : { x: a.points[0] * scale, y: a.points[1] * scale };
+
+  const size = Math.max(11, Math.min(ctx.canvas.width, ctx.canvas.height) / 55);
+  ctx.save();
+  ctx.font = `600 ${size}px system-ui, sans-serif`;
+  const pad = size * 0.3;
+  const textWidth = ctx.measureText(a.label).width;
+  const y = Math.max(size + pad * 2, anchor.y);
+  ctx.fillStyle = a.color;
+  ctx.fillRect(anchor.x, y - size - pad * 2, textWidth + pad * 2, size + pad * 2);
+  ctx.fillStyle = "#0b0b0b";
+  ctx.fillText(a.label, anchor.x + pad, y - pad * 1.2);
+  ctx.restore();
+}
+
+/**
+ * A ruler in the coordinate space the caller reads and writes.
+ *
+ * Labels are canvas pixels, which for the agent's verification image is
+ * snapshot space — the same numbers describeSession reports and place_box
+ * expects back. Labelling anything else would be a third coordinate system.
+ */
+function drawGrid(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+): void {
+  const divisions = 10;
+  const size = Math.max(10, Math.min(w, h) / 70);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 1;
+  ctx.font = `500 ${size}px ui-monospace, monospace`;
+
+  for (let i = 1; i < divisions; i += 1) {
+    const x = Math.round((w * i) / divisions);
+    const y = Math.round((h * i) / divisions);
+
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+
+    // Drawn twice — dark under light — so the numbers stay readable over both
+    // a white backdrop and a black one.
+    for (const [text, tx, ty] of [
+      [String(x), x + 3, size + 2],
+      [String(y), 3, y - 3],
+    ] as const) {
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.lineWidth = 3;
+      ctx.strokeText(text, tx, ty);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(text, tx, ty);
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.lineWidth = 1;
+    }
+  }
   ctx.restore();
 }
 

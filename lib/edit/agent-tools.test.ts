@@ -149,6 +149,9 @@ describe("EDIT_AGENT_TOOLS", () => {
       "separate_layers",
       "restore_version",
       "ask_user",
+      // Appended, never inserted — the twelve above were the PRD §8.2 set and
+      // their positions are a cache prefix.
+      "preview_marks",
     ]);
     expect(EDIT_AGENT_TOOLS.map((t) => t.name)).toEqual([...TOOL_NAMES]);
   });
@@ -605,6 +608,30 @@ function deepFreeze<T>(value: T): T {
 }
 
 // ─────────────────────────── describeSession ──────────────────────────────
+
+describe("preview_marks", () => {
+  it("defaults to the base reference when none is named", () => {
+    // "Show me what I did" must not fail because the model omitted an id it
+    // has exactly one candidate for.
+    expect(ok(plan("preview_marks", {}))).toEqual({
+      kind: "preview_marks",
+      refId: "ref-a",
+    });
+  });
+
+  it("names the references that exist when the id is wrong", () => {
+    const r = plan("preview_marks", { refId: "nope" });
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.error).toContain("ref-a");
+  });
+
+  it("is appended last, because the tool array is a cache prefix", () => {
+    // Rule 3 in agent-tools.ts: tools render at position 0 of every request,
+    // ahead of the system prompt and the image. Reordering re-bills the
+    // snapshot at 1x on every turn of every conversation.
+    expect(TOOL_NAMES[TOOL_NAMES.length - 1]).toBe("preview_marks");
+  });
+});
 
 describe("per-reference scales", () => {
   // The bug this prevents: one scale for the whole session. A 4000px base and
