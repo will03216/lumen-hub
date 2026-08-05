@@ -34,6 +34,7 @@ import {
   getSessionSnapshot,
   lastWriteError,
   listEditSessions,
+  patchVersion,
   removeAnnotation,
   restoreVersion,
   subscribeEditSessions,
@@ -445,5 +446,49 @@ describe("write failures", () => {
 
     updateEditSession(s.id, { instruction: "small" });
     expect(lastWriteError()).toBeNull();
+  });
+});
+
+describe("a version keeps both prompts", () => {
+  // Reported as "we are not storing the prompts for each version". The store
+  // was never the problem — nothing displayed them — but the round trip is
+  // worth pinning, because a version is the ONLY record of what a render
+  // actually sent once the canvas has moved on.
+  it("round-trips instruction and compiledPrompt through a reload", () => {
+    const s = createEditSession({ name: "p" });
+    appendVersion(s.id, {
+      ...version("v1"),
+      instruction: "put the cap on the bottle",
+      compiledPrompt:
+        "put the cap on the bottle\n\nReference image 1 interactive targets (normalized 0-1000 coordinates):\n<bbox>[[332,672,590,952]]</bbox>",
+    });
+
+    // Re-read through the public API, the way a reload would.
+    const stored = getEditSession(s.id)!.versions.at(-1)!;
+    expect(stored.instruction).toBe("put the cap on the bottle");
+    expect(stored.compiledPrompt).toContain("<bbox>[[332,672,590,952]]</bbox>");
+  });
+
+  it("keeps them when the version is patched on settle", () => {
+    // patchVersion runs twice per render — pending → done — and a spread that
+    // dropped the prompts would look exactly like "not stored".
+    const s = createEditSession({ name: "p" });
+    appendVersion(s.id, {
+      ...version("v1"),
+      instruction: "make it walnut",
+      compiledPrompt: "make it walnut\n\n<bbox>[[1,2,3,4]]</bbox>",
+      status: "pending",
+      outputs: [],
+    });
+    patchVersion(s.id, "v1", {
+      status: "done",
+      outputs: [{ url: "/library-cache/out.png" }],
+      elapsedMs: 4200,
+    });
+
+    const v = getEditSession(s.id)!.versions.at(-1)!;
+    expect(v.status).toBe("done");
+    expect(v.instruction).toBe("make it walnut");
+    expect(v.compiledPrompt).toContain("<bbox>");
   });
 });

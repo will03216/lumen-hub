@@ -386,6 +386,14 @@ export function useEditAgent(
         }
 
         case "render": {
+          // Checked here as well as in the render hook so the model gets a
+          // corrective it can act on, rather than a generic failure after the
+          // approval chip has already been through the user.
+          if (!session.instruction.trim()) {
+            return {
+              text: "There is no instruction set, so nothing was rendered. Call set_instruction with the edit you want, then render.",
+            };
+          }
           await onRenderRef.current();
           const after = getEditSession(sessionId);
           const last = after?.versions.at(-1);
