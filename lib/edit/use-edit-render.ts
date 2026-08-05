@@ -338,7 +338,17 @@ export function useEditRender(sessionId: string) {
     if (!session) return;
 
     const req = buildEditRequest(session);
-    if (!req.prompt.trim()) {
+    // The INSTRUCTION, not the compiled prompt.
+    //
+    // A compiled prompt is non-empty as soon as a single mark exists — the
+    // coordinate tag block alone satisfies it. So this used to let a render
+    // through with no instruction at all, and the version stored
+    // `instruction: ""`: the rail showed "—", the Library asset for that
+    // output had no prompt, and "Reuse prompt" seeded the Generator with
+    // nothing. The UI's Render button has always required typed text, so this
+    // only ever fired on the agent's path — the model placing marks with notes
+    // and calling render without set_instruction.
+    if (!session.instruction.trim()) {
       setState({
         status: "error",
         error: classifyError(400, "Describe the edit you want before rendering."),

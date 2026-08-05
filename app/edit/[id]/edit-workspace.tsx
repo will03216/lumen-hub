@@ -53,6 +53,7 @@ import { LayersPanel } from "./layers-panel";
 import { EnhanceButton } from "./enhance-button";
 import { PayloadInspector } from "./payload-inspector";
 import { RequestCurl } from "./request-curl";
+import { VersionPrompt } from "./version-prompt";
 
 /** Kill switch for §5B. Set NEXT_PUBLIC_EDIT_LAYERS=0 to hide the panel. */
 const LAYERS_ENABLED = process.env.NEXT_PUBLIC_EDIT_LAYERS !== "0";
@@ -558,20 +559,31 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
             onClick={() => setShowCompiled((v) => !v)}
             className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute transition-colors hover:text-ink-dim"
           >
-            {showCompiled ? "▾" : "▸"} show compiled prompt & request
+            {showCompiled ? "▾" : "▸"}{" "}
+            {viewing ? "show what this version sent" : "show compiled prompt & request"}
           </button>
-          {showCompiled && (
-            <>
-              <CompiledPrompt session={session} />
-              {/* The other half of "what did it actually send?" — the wire
-                  request, with the key left out. */}
-              <RequestCurl session={session} />
-              {/* And the bytes themselves — the cURL body elides them, and
-                  "is it sending the edited image?" is a question only the
-                  actual payload can answer. */}
-              <PayloadInspector session={session} />
-            </>
-          )}
+          {showCompiled &&
+            (viewing ? (
+              /* Looking at a version: show what THAT render sent, from its own
+                 record. The live compiled prompt describes a request that has
+                 not been made, and showing it here is how "we don't store the
+                 prompt per version" came to be true from the outside. */
+              <VersionPrompt
+                version={viewing}
+                n={session.versions.findIndex((v) => v.id === viewing.id) + 1}
+              />
+            ) : (
+              <>
+                <CompiledPrompt session={session} />
+                {/* The other half of "what did it actually send?" — the wire
+                    request, with the key left out. */}
+                <RequestCurl session={session} />
+                {/* And the bytes themselves — the cURL body elides them, and
+                    "is it sending the edited image?" is a question only the
+                    actual payload can answer. */}
+                <PayloadInspector session={session} />
+              </>
+            ))}
         </div>
       </div>
     </div>
