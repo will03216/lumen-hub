@@ -61,6 +61,7 @@
 
 import { clampToImage } from "./coords";
 import type { DraftAnnotation } from "./annotations";
+import { describeLayerBox } from "./layers-normalize";
 import {
   MAX_ANNOTATIONS_PER_REF,
   type Annotation,
@@ -262,9 +263,14 @@ export const EDIT_AGENT_TOOLS: readonly EditToolDef[] = [
       "Draw an arrow from one place to another. APPROXIMATE, and a last resort: an arrow has no " +
       "coordinate-tag equivalent, so it is drawn into a copy of the image in bright magenta and " +
       "described in prose. The image model sees that markup as pixels and may reproduce it.\n\n" +
-      "Use it only for direction or motion that a location cannot express — move this thing " +
-      "there, have the subject look that way, extend this line onward. If all you need is to " +
-      "identify a target, use place_point or place_box instead.",
+      "Use it for direction or motion that a location cannot express — move this thing there, " +
+      "have the subject look that way, extend this line onward. If all you need is to identify " +
+      "a target, use place_point or place_box instead.\n\n" +
+      "PAIR IT WITH A BOX for 'move-to'. Box the subject first, then draw the arrow from inside " +
+      "that box to the destination. The box states WHICH thing exactly, as a coordinate tag; " +
+      "the arrow then carries only WHERE, which is all it is good for. A lone move-to arrow " +
+      "identifies its subject by nothing but where the tail landed — so a tail slightly off " +
+      "moves the wrong thing.",
     input_schema: {
       type: "object",
       properties: {
@@ -380,7 +386,11 @@ export const EDIT_AGENT_TOOLS: readonly EditToolDef[] = [
       "Split a reference into independently movable layers — a background plate plus the " +
       "elements on it. THIS COSTS THE USER MONEY and will pause for their explicit approval.\n\n" +
       "Use it when the request is about rearranging or isolating existing elements rather than " +
-      "changing what they look like. For a change of appearance, mark and render instead.",
+      "changing what they look like. For a change of appearance, mark and render instead.\n\n" +
+      "It also MEASURES: each element comes back named with the box it occupies, in the " +
+      "coordinates you send. That is the only source of position here that is not your own " +
+      "estimate, so it is also the way out when a mark has missed twice and re-placing it by " +
+      "eye keeps missing.",
     input_schema: {
       type: "object",
       properties: {
@@ -833,6 +843,16 @@ export function describeSession(session: EditSession, scales: ScaleMap): unknown
       sourceRefId: l.sourceRefId,
       status: l.status,
       layerCount: l.layers.length,
+      // Named, measured boxes — scaled into the same space as this session's
+      // annotations and dimensions above. Reported here as well as in the
+      // separate_layers result so they outlive the turn that produced them:
+      // an agent that separated three turns ago and is now placing a mark
+      // would otherwise be back to estimating.
+      located: l.layers
+        .filter((layer) => layer.zIndex !== 0 && layer.bboxAbsolute)
+        .map((layer) =>
+          describeLayerBox(layer, effectiveScale(scales[l.sourceRefId])),
+        ),
     })),
   };
 }

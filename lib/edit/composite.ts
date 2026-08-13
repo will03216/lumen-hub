@@ -330,18 +330,58 @@ function fitScale(w: number, h: number, maxPixels?: number): number {
   return Math.sqrt(maxPixels / (w * h));
 }
 
+/**
+ * An `<img>` that neither loads nor errors is the agent's worst failure mode.
+ *
+ * `onload`/`onerror` are the only two ways out of this promise, and a request
+ * that hangs at the network layer fires neither — the browser will sit on it
+ * for minutes. Every caller here is awaited: the agent's own snapshot step
+ * awaits it before its first turn, so a hung image means `send()` never
+ * reaches its `finally`, `busy` is never cleared, and the panel shows
+ * "Thinking…" forever with no error and nothing to retry. That is the stuck
+ * agent, and it is indistinguishable from a slow model.
+ *
+ * Well under TURN_TIMEOUT_MS (120s): decoding a 2K frame off the proxy is a
+ * few seconds at worst, so anything past this is hung rather than slow.
+ */
+const IMAGE_LOAD_TIMEOUT_MS = 30_000;
+
 function loadImage(
   url: string,
   crossOrigin: boolean,
 ): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (fn: () => void) => {
+      if (timer !== undefined) clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      fn();
+    };
     // Must be set BEFORE src, or the attribute is ignored for the load
     // already in flight and the canvas taints anyway.
     if (crossOrigin) img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
+    img.onload = () => settle(() => resolve(img));
     img.onerror = () =>
-      reject(new Error("Could not load the image to composite onto."));
+      settle(() =>
+        reject(new Error("Could not load the image to composite onto.")),
+      );
+    timer = setTimeout(
+      () =>
+        settle(() => {
+          // Drop the in-flight request. Without this the browser keeps
+          // decoding into an element nothing is waiting for.
+          img.src = "";
+          reject(
+            new Error(
+              `The image did not load within ${Math.round(IMAGE_LOAD_TIMEOUT_MS / 1000)}s. ` +
+                "It may be an expired link, or the proxy may not be answering.",
+            ),
+          );
+        }),
+      IMAGE_LOAD_TIMEOUT_MS,
+    );
     img.src = url;
   });
 }

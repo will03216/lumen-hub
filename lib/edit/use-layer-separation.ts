@@ -17,7 +17,7 @@
  */
 
 import * as React from "react";
-import type { NormalizedLayer } from "./layers-normalize";
+import type { LocatableLayer, NormalizedLayer } from "./layers-normalize";
 import { getEditSession } from "./sessions";
 import { maxInputPixels, toWireImage } from "./use-edit-render";
 
@@ -76,7 +76,13 @@ export function useLayerSeparation(sessionId: string) {
     async (
       maxLayers: number,
       opts: { refId?: string; mode?: "auto" | "region" } = {},
-    ): Promise<{ ok: boolean; message: string }> => {
+    ): Promise<{
+      ok: boolean;
+      message: string;
+      /** Present only on success — the measured boxes, for callers that need
+       *  positions rather than a sentence. */
+      layers?: LocatableLayer[];
+    }> => {
       const session = getEditSession(sessionId);
       const ref = opts.refId
         ? session?.refs.find((r) => r.id === opts.refId)
@@ -186,6 +192,11 @@ export function useLayerSeparation(sessionId: string) {
                 .map((l) => (l.zIndex === 0 ? "background" : (l.name ?? `layer ${l.zIndex}`)))
                 .join(", ")}. They are listed in the Layers panel.`
             : "Nothing was separated out of this image.",
+          // The message above is for the user, who is looking at the panel and
+          // does not need coordinates. The agent does — these boxes are the
+          // only measured positions it ever gets — so hand the layers back and
+          // let the caller phrase them in its own coordinate space.
+          layers,
         };
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") {

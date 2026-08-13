@@ -35,6 +35,7 @@ import Link from "next/link";
 import { Loader2, RotateCcw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEditAgent, type ChatEntry } from "@/lib/edit/use-edit-agent";
+import type { LocatableLayer } from "@/lib/edit/layers-normalize";
 import { isSubmitKey, useAutoGrow } from "./use-auto-grow";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ export function AgentPanel({
   onSeparateLayers?: (
     maxLayers: number,
     opts: { refId?: string; mode?: "auto" | "region" },
-  ) => Promise<{ ok: boolean; message: string }>;
+  ) => Promise<{ ok: boolean; message: string; layers?: LocatableLayer[] }>;
 }) {
   const { entries, send, busy, pending, resolveApproval, reset, needsKey } =
     useEditAgent(sessionId, { onRender, onSeparateLayers });

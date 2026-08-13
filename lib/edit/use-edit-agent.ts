@@ -39,6 +39,7 @@ import {
 } from "./agent-tools";
 import { buildAnnotation } from "./annotations";
 import { renderComposite } from "./composite";
+import { describeLayerBox, type LocatableLayer } from "./layers-normalize";
 import { resolveSafeUrl } from "./same-origin";
 import { measureImage } from "./start-session";
 import {
@@ -79,6 +80,40 @@ const MAX_VISION_REFS = 4;
  *  route allows 300s; a turn that has taken two minutes is not coming back
  *  with anything useful. */
 const TURN_TIMEOUT_MS = 120_000;
+
+/**
+ * Preparing the images before the first turn: decode up to MAX_VISION_REFS
+ * references, downscale, re-encode. Each individual load is already bounded,
+ * and they run in parallel, so this is generous.
+ *
+ * It exists because "Thinking…" is driven by `busy`, and `busy` is only
+ * cleared in `send`'s `finally`. Anything awaited before the first fetch that
+ * neither settles nor throws parks the panel forever with no error and
+ * nothing to retry. Bounding each individual await one at a time has been a
+ * recurring source of exactly that bug; bounding the PHASE means a future
+ * unbounded await inside it still surfaces as a message instead of a hang.
+ */
+const SNAPSHOT_TIMEOUT_MS = 45_000;
+
+/** Reject if `p` has not settled within `ms`. The timer is cleared either way
+ *  so a resolved promise doesn't hold the tab awake. */
+async function withDeadline<T>(
+  p: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /**
  * How much to shrink an image so its long edge fits the vision tier.
@@ -201,7 +236,19 @@ type PendingApproval = {
  * tool results, because the tool-result slot is text-only on this wire
  * format — there is nowhere in it to put a picture.
  */
-type ToolOutcome = { text: string; image?: string };
+/**
+ * `image` carries its own caption because two very different pictures travel
+ * this field — a finished render, and the marked-up verification view — and
+ * the sentence attached to them is what tells the model which it is looking
+ * at. One shared caption said "this is the render that just completed" over
+ * both, so a preview_marks image arrived labelled as an output: the model
+ * judged its own magenta annotations as if they were rendered pixels, and was
+ * told in the same breath to propose a fix rather than make one. That is the
+ * opposite of what verification is for, and no amount of system-prompt
+ * instruction to "fix it in the same turn" survives a caption that says
+ * otherwise at the moment the image lands.
+ */
+type ToolOutcome = { text: string; image?: { url: string; caption: string } };
 
 /** What the route hands back for one turn. */
 type AgentTurn = {
@@ -224,7 +271,7 @@ export function useEditAgent(
     onSeparateLayers?: (
       maxLayers: number,
       opts: { refId?: string; mode?: "auto" | "region" },
-    ) => Promise<{ ok: boolean; message: string }>;
+    ) => Promise<{ ok: boolean; message: string; layers?: LocatableLayer[] }>;
   },
 ) {
   const [entries, setEntries] = React.useState<ChatEntry[]>([]);
@@ -364,7 +411,15 @@ export function useEditAgent(
               visible.length === 0
                 ? `No marks on this reference yet. The attached image is ${w}x${h} with grid lines every ${Math.round(w / 10)} across and ${Math.round(h / 10)} down — read the target's edges off those lines before placing anything.`
                 : `${visible.length} mark${visible.length === 1 ? "" : "s"} on the attached ${w}x${h} image, over a grid with lines every ${Math.round(w / 10)} across and ${Math.round(h / 10)} down. Currently: ${geometry}. Check each is ON the thing you meant. If not, clear_annotations and place it again IN THIS TURN, reading the object's edges off the grid lines rather than estimating again.`,
-            image: dataUrl,
+            image: {
+              url: dataUrl,
+              caption:
+                "This is your own marks drawn back onto the image over a coordinate grid. " +
+                "It is NOT a render and no pixels have been edited. Check each mark is on the " +
+                "thing you meant. If any is off, call clear_annotations and place it again NOW, " +
+                "in this turn, reading the edges off the grid lines. Do not describe the " +
+                "correction and stop — the user cannot place the mark for you.",
+            },
           };
         }
 
@@ -480,7 +535,13 @@ export function useEditAgent(
             const shot = await downscaleForVision(url);
             return {
               text: "Render finished. The result is attached — check it against what was asked.",
-              image: shot,
+              image: {
+                url: shot,
+                caption:
+                  "This is the render that just completed. Compare it against what was asked " +
+                  "and say plainly whether it worked. If something is off, say what and propose " +
+                  "the smallest fix — do not start another render without being asked.",
+              },
             };
           } catch {
             return {
@@ -503,7 +564,26 @@ export function useEditAgent(
             refId: plan.refId,
             mode: plan.mode,
           });
-          return { text: outcome.message };
+          // The measured boxes, in the agent's own coordinate space. This is
+          // the only place in the whole loop where a position comes from
+          // something other than the model's eye, so it is the one number it
+          // should prefer over its own estimate — say so explicitly, because
+          // a model handed coordinates it did not produce will otherwise keep
+          // using the ones it did.
+          const located = (outcome.layers ?? []).filter(
+            (l) => l.zIndex !== 0 && l.bboxAbsolute,
+          );
+          if (located.length === 0) return { text: outcome.message };
+          const ref =
+            session.refs.find((r) => r.id === plan.refId) ?? session.refs[0];
+          const s = ref ? visionScale(ref.width, ref.height) : 1;
+          return {
+            text:
+              `${outcome.message} Measured positions: ${located
+                .map((l) => describeLayerBox(l, s))
+                .join("; ")}. These are detected, not estimated — ` +
+              `place marks from these numbers rather than judging the position by eye.`,
+          };
         }
 
         case "ask_user":
@@ -550,19 +630,59 @@ export function useEditAgent(
           return;
         }
         if (!res.ok || data.error) {
+          // The agent failing intermittently was undebuggable: the panel shows
+          // one sentence, the server log has the route's side of it, and
+          // nothing anywhere records the STATE the request was made in. These
+          // four numbers are what distinguish the causes from each other — a
+          // transcript that has grown too large, a poisoned message from an
+          // earlier turn, or an upstream that is simply down — and without
+          // them each recurrence costs another round of guessing.
+          console.warn("[edit.agent] turn failed", {
+            status: res.status,
+            error: data.error,
+            turn,
+            messages: wireRef.current.length,
+            images: wireRef.current.filter(
+              (m) =>
+                Array.isArray(m.content) &&
+                m.content.some((c) => c.type === "image_url"),
+            ).length,
+            approxPayloadKB: Math.round(
+              JSON.stringify(wireRef.current).length / 1024,
+            ),
+          });
           push({ kind: "error", text: data.error ?? `Request failed (${res.status})` });
           return;
         }
 
         const calls = data.toolCalls ?? [];
 
-        // Echo the assistant turn back verbatim. The tool_calls have to be in
-        // the transcript or the follow-up tool results have nothing to attach
-        // to and the model rejects the next request.
-        wireRef.current = [
-          ...wireRef.current,
-          { role: "assistant", content: data.content ?? null, tool_calls: calls },
-        ];
+        // Echo the assistant turn back. The tool_calls have to be in the
+        // transcript or the follow-up tool results have nothing to attach to
+        // and the model rejects the next request.
+        //
+        // OMIT THE EMPTY FIELDS — do not send `tool_calls: []` or a bare
+        // `content: null`. Both are rejected by OpenAI-compatible validators
+        // ("empty array is not allowed"), and this message is PERSISTED: it
+        // stays in `wireRef` for the rest of the conversation and is re-sent
+        // on every later turn. So the failure is not the turn that produced
+        // it — that one already succeeded — it is every message after it,
+        // until the user starts a new chat. Which is exactly what "the agent
+        // works, then stops working" looks like from the outside.
+        //
+        // A turn with neither content nor tool calls is not a message at all;
+        // appending it would poison the transcript with something no schema
+        // accepts. The branch below reports that case to the user.
+        if (calls.length > 0 || data.content != null) {
+          wireRef.current = [
+            ...wireRef.current,
+            {
+              role: "assistant",
+              ...(data.content != null ? { content: data.content } : {}),
+              ...(calls.length > 0 ? { tool_calls: calls } : {}),
+            },
+          ];
+        }
 
         if (data.content?.trim()) {
           push({ kind: "assistant", text: data.content.trim() });
@@ -606,7 +726,7 @@ export function useEditAgent(
 
         const results: ChatMessage[] = [];
         /** Images a tool produced for the model to look at. */
-        const followUpImages: string[] = [];
+        const followUpImages: Array<{ url: string; caption: string }> = [];
 
         for (const call of calls) {
           const name = call.function.name;
@@ -700,22 +820,20 @@ export function useEditAgent(
         // is text-only on this wire format — and it must come after them,
         // because every tool_call_id has to be answered before the next turn
         // is valid.
+        // One turn per image, each with the caption its producer wrote. Not
+        // one turn carrying all of them: a render and a mark preview can land
+        // in the same round, and a single shared sentence necessarily
+        // mislabels one of them.
         if (followUpImages.length > 0) {
           wireRef.current = [
             ...wireRef.current,
-            {
-              role: "user",
+            ...followUpImages.map(({ url, caption }) => ({
+              role: "user" as const,
               content: [
-                ...followUpImages.map((url) => ({
-                  type: "image_url" as const,
-                  image_url: { url },
-                })),
-                {
-                  type: "text" as const,
-                  text: "This is the render that just completed. Compare it against what was asked and say plainly whether it worked. If something is off, say what and propose the smallest fix — do not start another render without being asked.",
-                },
+                { type: "image_url" as const, image_url: { url } },
+                { type: "text" as const, text: caption },
               ],
-            },
+            })),
           ];
         }
       }
@@ -736,7 +854,16 @@ export function useEditAgent(
       push({ kind: "user", text: trimmed });
 
       try {
-        const snap = await snapshot();
+        // Every await between here and the first fetch must be bounded, or
+        // the panel sits on "Thinking…" with no error. The fetch below has
+        // its own deadline; the approval gate is the one deliberate
+        // exception, because a user taking their time is not a fault.
+        const snap = await withDeadline(
+          snapshot(),
+          SNAPSHOT_TIMEOUT_MS,
+          "Could not prepare the images for the agent — one of them never " +
+            "finished loading. Reload the page and try again.",
+        );
         if (!snap) {
           push({ kind: "error", text: "Add an image before asking for an edit." });
           return;
@@ -795,9 +922,15 @@ export function useEditAgent(
    * conversation starts from what is on the canvas NOW.
    */
   const reset = React.useCallback(() => {
+    // Answer a waiting approval before dropping the reference to it. Nulling
+    // it alone left `runLoop` parked on a promise nothing could ever resolve:
+    // the loop never returned, its turn never ended, and `resolveApproval`
+    // had already lost the resolver it needed. Declining is the honest answer
+    // — the user asked for a new chat, not for the render to go ahead.
+    approvalRef.current?.(false);
+    approvalRef.current = null;
     wireRef.current = [];
     shownRef.current = null;
-    approvalRef.current = null;
     setEntries([]);
     setPending(null);
     setBusy(false);

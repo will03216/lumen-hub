@@ -261,7 +261,16 @@ export function compileAnnotationPrompt(input: CompileInput): CompileResult {
     const targets = targetBlock(ref.index, points, boxes);
     if (targets) blocks.push(targets);
 
-    const raster = rasterBlock(ref.index, rasters);
+    // Only the boxes that actually reached the `<bbox>` array. A box narrower
+    // than MIN_BOX_SPAN was demoted to a point above, and telling the model
+    // "the box at the tail" when no box was sent would point at nothing.
+    // `slots` is parallel to `kept` — one entry per annotation — which is what
+    // makes this filter safe.
+    const taggedBoxes = kept.filter(
+      (a, i): a is BoxAnnotation => a.kind === "box" && slots[i]?.tag === "box",
+    );
+
+    const raster = rasterBlock(ref.index, rasters, taggedBoxes);
     if (raster) blocks.push(raster);
   }
 
@@ -366,7 +375,14 @@ function notesLine(
  * is the difference between an edit and an edit with magenta scribbles drawn
  * over it.
  */
-function rasterBlock(index: number, rasters: Annotation[]): string | null {
+function rasterBlock(
+  index: number,
+  rasters: Annotation[],
+  /** Boxes sent as `<bbox>` tags on this same reference. An arrow whose tail
+   *  sits inside one is not a lone arrow — the pair names its subject exactly
+   *  where the arrow alone only gestures at it. */
+  taggedBoxes: BoxAnnotation[] = [],
+): string | null {
   if (rasters.length === 0) return null;
 
   const brushes = rasters.filter((a) => a.kind === "brush");
@@ -399,7 +415,7 @@ function rasterBlock(index: number, rasters: Annotation[]): string | null {
   if (brushes.length > 0) {
     sentences.push("Apply the requested edit to the painted areas.");
   }
-  if (arrows.length > 0) sentences.push(arrowSentence(arrows));
+  if (arrows.length > 0) sentences.push(arrowSentence(arrows, taggedBoxes));
   sentences.push(
     `Do not reproduce the ${joinNatural(colorNames(rasters))} markup in the output.`,
   );
@@ -417,7 +433,10 @@ function rasterBlock(index: number, rasters: Annotation[]): string | null {
  * emitting several competing instructions — the model would have to pick one,
  * and which one it picked would not be observable.
  */
-function arrowSentence(arrows: ArrowAnnotation[]): string {
+function arrowSentence(
+  arrows: ArrowAnnotation[],
+  taggedBoxes: BoxAnnotation[] = [],
+): string {
   const GENERIC =
     "Treat each arrow as a direction or destination indicator — the tail is the source and the head is the target.";
 
@@ -426,6 +445,23 @@ function arrowSentence(arrows: ArrowAnnotation[]): string {
 
   switch (arrows[0].intent) {
     case "move-to":
+      // A move says two things — WHICH thing, and WHERE to. An arrow alone
+      // carries both approximately: the subject is identified only by where a
+      // magenta tail happens to land, in painted pixels. When every tail sits
+      // inside a box, the subject is already stated exactly as a `<bbox>` tag,
+      // and the arrow is left carrying only the direction — the one part a box
+      // cannot express. Say so, or the model has no way to know the two marks
+      // are about the same object.
+      //
+      // All-or-nothing, following the mixed-intent rule above: a sentence that
+      // holds for some arrows and not others is worse than the general one,
+      // because which arrow it applies to is not observable in the result.
+      if (
+        taggedBoxes.length > 0 &&
+        arrows.every((a) => taggedBoxes.some((b) => containsPoint(b, a.from)))
+      ) {
+        return "Treat each arrow as a movement instruction — the marked box at its tail is the subject to move, and the head is where it goes.";
+      }
       return "Treat each arrow as a movement instruction — move the subject at the tail to the position at the head.";
     case "look-toward":
       return "Treat each arrow as a gaze direction — the subject at the tail should face toward the head.";
@@ -436,6 +472,19 @@ function arrowSentence(arrows: ArrowAnnotation[]): string {
     default:
       return GENERIC;
   }
+}
+
+/** Is this point inside the box? Inclusive on all four edges — a tail drawn
+ *  exactly on the boundary is a tail the user meant to put on the object, and
+ *  a strict test would silently fall back to the vaguer sentence. Both are in
+ *  the reference's own pixel space; neither has been normalized yet. */
+function containsPoint(box: BoxAnnotation, p: { x: number; y: number }): boolean {
+  return (
+    p.x >= box.rect.x &&
+    p.x <= box.rect.x + box.rect.w &&
+    p.y >= box.rect.y &&
+    p.y <= box.rect.y + box.rect.h
+  );
 }
 
 // ─────────────────────── Colour naming ────────────────────────────────────

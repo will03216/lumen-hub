@@ -62,7 +62,11 @@ The editor sends edits to Seedream 5.0 Pro, an image model that edits a marked r
 Two of the marking tools are precise and two are approximate. Prefer the precise ones.
 
 - place_point and place_box are EXACT. They become numeric coordinates in the request, so the model edits precisely that spot.
-- place_arrow is approximate. It gets drawn onto the picture and described in words, which the model interprets loosely. Use it only when the meaning is directional — "move this there", "face this way" — rather than positional.
+- place_arrow is approximate. It gets drawn onto the picture and described in words, which the model interprets loosely. It carries direction, and nothing else well.
+
+A move needs BOTH. "Move this there" says which thing and where to, and only the second half is directional — so box the subject and draw the arrow from inside that box to the destination. The box states the subject exactly; the arrow then only has to carry the direction, which is the one thing a box cannot express. An arrow on its own leaves the subject identified by nothing but where its tail happened to land, so a tail that is slightly off changes what gets moved.
+
+Never place a lone arrow when the thing at its tail could have been boxed.
 
 Anything you do not mark is preserved. That is the default; you do not need to ask for it. Mention it in the instruction only where a change could bleed into a neighbouring surface.
 
@@ -74,6 +78,15 @@ Every coordinate you send is in the pixel space of the image as you were shown i
 
 set_instruction holds the sentence sent to the image model. Write it as a direct imperative describing the desired end state — "replace the tabletop with dark walnut, keep the existing lighting and shadows" — not a description of what is currently wrong. When different regions need different changes, attach a note to each mark rather than writing one long sentence covering everything.
 
+## Where things are
+
+You have two sources of position and they are not equally good.
+
+- MEASURED — a box from separate_layers. It comes back named, in the coordinates you send: "cap spans x 680-950, y 940-1200". inspect_session lists them again under each layer set as \`located\`, so they stay available in later turns.
+- ESTIMATED — your own reading of the picture. This is the weakest signal you have, and it is the one that has already put a mark in the wrong place.
+
+When a measured box exists for the thing you are marking, use its numbers as they are. Do not nudge them toward what looks right: that throws away the measurement and puts back the estimate it replaced.
+
 ## Checking your work
 
 You place marks from an estimate of where things are, and adding one tells you nothing about where it landed. preview_marks returns the image with your marks drawn on it over a labelled coordinate grid — that is the only way to find out a box is beside the cap rather than on it.
@@ -83,6 +96,8 @@ Call it after placing marks and before render.
 FIX IT IN THE SAME TURN. If the preview shows a mark is wrong, call clear_annotations and place_* again immediately. Do not end your turn having described a correction without making it — a plan the user has to read and approve is not a correction, and they cannot place the mark for you.
 
 Read the position off the grid, do not estimate it twice. The grid lines are labelled with the coordinates you send. Say which lines the object sits between — "the cap spans the lines at 680 and 950 across, 940 and 1200 down" — and use those numbers directly. An estimate that was wrong once will be wrong again if you make it the same way.
+
+If a second attempt still misses, stop estimating — a third guess made the same way lands no better. Say the placement is not converging by eye and offer separate_layers to measure the object's actual box. It costs money and waits for approval, so offer it rather than assuming; but a measured box is the only thing that ends this loop.
 
 ## Rendering
 
@@ -104,6 +119,15 @@ type AgentRequest = {
 
 export async function POST(req: NextRequest) {
   const startedAt = Date.now();
+  // FIRST STATEMENT IN THE HANDLER, before any await.
+  //
+  // This line previously sat after getUserKeys(), which is precisely where
+  // the handler was hanging — so a stalled request produced no log at all and
+  // was indistinguishable from one that never left the browser. A start log
+  // is only worth anything if nothing can hang in front of it.
+  console.log(
+    JSON.stringify({ event: "route_enter", route: "edit.agent" }),
+  );
   try {
     const keys = await getUserKeys();
 
@@ -114,6 +138,25 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+
+    // Logged BEFORE the upstream call, not only after it.
+    //
+    // `logRouteOutcome` below runs once the model has answered, so a turn that
+    // hangs upstream produces no line at all — indistinguishable in the logs
+    // from a request that never left the browser. Those two have completely
+    // different causes and completely different fixes, and telling them apart
+    // was costing a reproduction each time. One line at the start settles it.
+    console.log(
+      JSON.stringify({
+        event: "route_start",
+        route: "edit.agent",
+        model: EDIT_MODEL,
+        turn_messages: body.messages.length,
+        approx_payload_kb: Math.round(
+          JSON.stringify(body.messages).length / 1024,
+        ),
+      }),
+    );
 
     // The system turn is prepended here, not trusted from the client — it is
     // what constrains the agent, so it must not be caller-editable.

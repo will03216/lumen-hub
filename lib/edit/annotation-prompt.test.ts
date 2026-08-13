@@ -715,6 +715,136 @@ describe("arrow intent", () => {
   });
 });
 
+/**
+ * A move-to arrow whose tail sits inside a box is the composition the agent is
+ * told to prefer: the box names the subject exactly as a `<bbox>` tag, the
+ * arrow carries only the direction. Nothing in the emitted prompt tied the two
+ * marks together, so the model had no way to know they were about one object.
+ *
+ * The all-or-nothing rule is the point of most of these cases. A sentence that
+ * is true of one arrow and false of another is worse than the vaguer one,
+ * because which arrow it applied to is invisible in the result — the same
+ * reasoning that makes mixed intents fall back.
+ */
+describe("move-to arrows paired with a box", () => {
+  const PAIRED =
+    "the marked box at its tail is the subject to move, and the head is where it goes";
+  const LONE = "move the subject at the tail to the position at the head";
+
+  it("names the box when the tail is inside one", () => {
+    seq = 0;
+    const { prompt } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 50, y: 50, w: 200, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 100 } }),
+        ]),
+      ],
+    });
+    expect(prompt).toContain(PAIRED);
+    expect(prompt).not.toContain(LONE);
+  });
+
+  it("keeps the lone wording when the tail is outside every box", () => {
+    seq = 0;
+    const { prompt } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 800, y: 500, w: 200, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 100 } }),
+        ]),
+      ],
+    });
+    expect(prompt).toContain(LONE);
+    expect(prompt).not.toContain(PAIRED);
+  });
+
+  it("keeps the lone wording when only some tails are boxed", () => {
+    seq = 0;
+    const { prompt } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 50, y: 50, w: 200, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 100 } }),
+          arrow({ intent: "move-to", from: { x: 1500, y: 800 } }),
+        ]),
+      ],
+    });
+    expect(prompt).toContain(LONE);
+    expect(prompt).not.toContain(PAIRED);
+  });
+
+  it("treats a tail exactly on the boundary as inside", () => {
+    // A tail drawn on the edge is a tail meant to be on the object; a strict
+    // test would quietly drop back to the vaguer sentence.
+    seq = 0;
+    const { prompt } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 100, y: 100, w: 200, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 300 } }),
+        ]),
+      ],
+    });
+    expect(prompt).toContain(PAIRED);
+  });
+
+  it("does not pair with a box that was demoted to a point", () => {
+    // 6px of a 2000px width normalizes to 3/1000, under MIN_BOX_SPAN, so no
+    // <bbox> tag is sent — "the marked box at its tail" would name nothing.
+    seq = 0;
+    const { prompt, warnings } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 98, y: 50, w: 6, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 100 } }),
+        ]),
+      ],
+    });
+    expect(prompt).not.toContain("<bbox>");
+    expect(warnings.some((w) => /sent as a point/.test(w))).toBe(true);
+    expect(prompt).toContain(LONE);
+    expect(prompt).not.toContain(PAIRED);
+  });
+
+  it("leaves the other intents alone even when a box contains the tail", () => {
+    seq = 0;
+    for (const intent of ["look-toward", "extend-along", "point-at"] as const) {
+      const { prompt } = compileAnnotationPrompt({
+        instruction: "x",
+        refs: [
+          ref([
+            box({ x: 50, y: 50, w: 200, h: 200 }),
+            arrow({ intent, from: { x: 100, y: 100 } }),
+          ]),
+        ],
+      });
+      expect(prompt).not.toContain(PAIRED);
+    }
+  });
+
+  it("still emits the box as a target tag, not only as arrow prose", () => {
+    // The pairing sentence explains the bbox; it must not replace it.
+    seq = 0;
+    const { prompt } = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          box({ x: 50, y: 50, w: 200, h: 200 }),
+          arrow({ intent: "move-to", from: { x: 100, y: 100 } }),
+        ]),
+      ],
+    });
+    expect(prompt).toContain("<bbox>");
+    expect(prompt).toContain(PAIRED);
+  });
+});
+
 // ─────────────────────────── Word cap ─────────────────────────────────────
 
 describe("word cap", () => {

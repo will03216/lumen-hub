@@ -61,6 +61,43 @@ export type NormalizedLayer = {
   bboxNormalized?: [number, number, number, number];
 };
 
+/** The subset of a layer needed to say where it is. Structural rather than a
+ *  `NormalizedLayer`, because the persisted `EditLayer` carries the same three
+ *  fields and both sides need this sentence. */
+export type LocatableLayer = {
+  zIndex: number;
+  name?: string;
+  bboxAbsolute?: [number, number, number, number];
+};
+
+/**
+ * One layer as a sentence the agent can take coordinates from.
+ *
+ * The agent's grounding problem is that it places marks from an estimate of
+ * where things are, and the verification pass asks it to re-estimate off a
+ * grid — the same faculty that just missed. Layer separation is the only part
+ * of this system that MEASURES an object's position, and its boxes were being
+ * dropped on the way back: the agent was handed "background, bottle, cap" and
+ * no numbers, so it went on estimating.
+ *
+ * `scale` maps source pixels into the space the agent works in (visionScale) —
+ * the same factor `describeGeometry` applies to annotations, so a box read
+ * from here can be passed straight to place_box. Pass 1 when they are equal.
+ *
+ * Phrasing deliberately matches `describeGeometry`'s "spans x …, y …" so the
+ * agent reads detected boxes and its own marks in one vocabulary.
+ */
+export function describeLayerBox(layer: LocatableLayer, scale = 1): string {
+  const name =
+    layer.zIndex === 0 ? "background" : (layer.name ?? `layer ${layer.zIndex}`);
+  const box = layer.bboxAbsolute;
+  // The background plate has no bbox by design — it is the whole canvas.
+  if (!box) return name;
+  const r = (v: number) => Math.round(v * scale);
+  const [left, top, right, bottom] = box;
+  return `${name} spans x ${r(left)}-${r(right)}, y ${r(top)}-${r(bottom)}`;
+}
+
 export type NormalizedLayerResponse = {
   /** Sorted by `zIndex` ascending, background first — i.e. paint order. */
   layers: NormalizedLayer[];

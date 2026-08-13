@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { normalizeLayerResponse } from "./layers-normalize";
+import { describeLayerBox, normalizeLayerResponse } from "./layers-normalize";
 
 /** Matches the PRD's worked example: 2K widescreen source. */
 const DIMS = { width: 2048, height: 1152 };
@@ -482,5 +482,73 @@ describe("garbage in, empty out — never a throw", () => {
     const snapshot = JSON.parse(JSON.stringify(res));
     normalizeLayerResponse(res, DIMS);
     expect(res).toEqual(snapshot);
+  });
+});
+
+/**
+ * describeLayerBox — the sentence the agent takes coordinates from.
+ *
+ * This is the only measured position in the editor's agent loop; everything
+ * else is the model reading a picture. Two things must hold or it is worse
+ * than useless: the scale has to match the space the agent sends coordinates
+ * in (an unscaled box is a mark placed confidently in the wrong place), and
+ * the phrasing has to match `describeGeometry`'s, so a detected box and the
+ * agent's own marks read as one vocabulary rather than two conventions.
+ */
+describe("describeLayerBox", () => {
+  const cap = {
+    zIndex: 2,
+    name: "cap",
+    bboxAbsolute: [680, 940, 950, 1200] as [number, number, number, number],
+  };
+
+  it("states the name and the box, left-top-right-bottom", () => {
+    expect(describeLayerBox(cap)).toBe("cap spans x 680-950, y 940-1200");
+  });
+
+  it("scales into the agent's coordinate space", () => {
+    // The agent works in vision space, so a source-space box handed over
+    // unscaled would be off by exactly this factor — the failure it exists
+    // to prevent.
+    expect(describeLayerBox(cap, 0.5)).toBe("cap spans x 340-475, y 470-600");
+  });
+
+  it("defaults to source space when no scale is given", () => {
+    expect(describeLayerBox(cap, 1)).toBe(describeLayerBox(cap));
+  });
+
+  it("rounds rather than emitting fractional pixels", () => {
+    const out = describeLayerBox(cap, 0.333);
+    expect(out).toBe("cap spans x 226-316, y 313-400");
+    expect(out).not.toMatch(/\./);
+  });
+
+  it("names the background plate and says nothing about its box", () => {
+    // z 0 has no bbox by design — it is the whole canvas. Inventing one
+    // would hand the agent a box that matches nothing it can mark.
+    expect(describeLayerBox({ zIndex: 0 })).toBe("background");
+  });
+
+  it("falls back to the z-index when upstream omits the name", () => {
+    expect(describeLayerBox({ zIndex: 3, bboxAbsolute: [0, 0, 10, 20] })).toBe(
+      "layer 3 spans x 0-10, y 0-20",
+    );
+  });
+
+  it("degrades to a bare name when the box is missing", () => {
+    // Preview-flagged shape: a named element with no bbox is possible, and
+    // it must not produce "cap spans x undefined".
+    expect(describeLayerBox({ zIndex: 1, name: "bottle" })).toBe("bottle");
+  });
+
+  it("describes what normalizeLayerResponse actually produces", () => {
+    // Guards the seam: the formatter reads fields the normalizer writes, so
+    // a rename on either side has to fail here rather than in production.
+    const { layers } = normalizeLayerResponse(documentedResponse(), DIMS);
+    const elements = layers.filter((l) => l.zIndex !== 0 && l.bboxAbsolute);
+    expect(elements.length).toBeGreaterThan(0);
+    for (const layer of elements) {
+      expect(describeLayerBox(layer)).toMatch(/ spans x \d+-\d+, y \d+-\d+$/);
+    }
   });
 });
