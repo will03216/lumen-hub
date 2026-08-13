@@ -63,6 +63,7 @@ import type { DraftAnnotation } from "@/lib/edit/annotations";
 import {
   VECTOR_MARK_COLOR,
   VECTOR_MARK_FILL,
+  defaultTextSize,
   markColor,
   type Annotation,
   type EditReference,
@@ -70,7 +71,7 @@ import {
   type Vec,
 } from "@/lib/edit/types";
 
-export type EditTool = "point" | "box" | "brush" | "arrow" | "pan";
+export type EditTool = "point" | "box" | "brush" | "arrow" | "text" | "pan";
 
 export type EditCanvasProps = {
   reference: EditReference;
@@ -78,6 +79,14 @@ export type EditCanvasProps = {
   tool: EditTool;
   brushWidth: number;
   color: string;
+  /**
+   * What a new text mark is for. "label" is a note to the model that never
+   * reaches the pixels; "render" is text the model must put IN the picture.
+   * Defaults to "label" because that is what people reach for by default, and
+   * the safe direction to be wrong in — a label wrongly rendered burns
+   * typography into someone's output permanently.
+   */
+  textMode?: "label" | "render";
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   /** Fired once per completed gesture. The parent assigns id/label/createdAt,
@@ -97,7 +106,8 @@ export type GeometryPatch =
   | { kind: "point"; at: Vec }
   | { kind: "box"; rect: ImageRect }
   | { kind: "brush"; points: number[] }
-  | { kind: "arrow"; from: Vec; to: Vec };
+  | { kind: "arrow"; from: Vec; to: Vec }
+  | { kind: "text"; at: Vec };
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
@@ -116,6 +126,7 @@ export default function EditCanvas({
   tool,
   brushWidth,
   color,
+  textMode = "label",
   selectedId,
   onSelect,
   onCommit,
@@ -293,6 +304,24 @@ export default function EditCanvas({
       // missed one — and the user gets no signal they aimed outside.
       if (!isInsideImage(p, imgW, imgH)) return;
       onCommit({ kind: "point", at: { x: Math.round(p.x), y: Math.round(p.y) } });
+      return;
+    }
+
+    if (tool === "text") {
+      if (!isInsideImage(p, imgW, imgH)) return;
+      // Committed empty. The text itself is typed in the marks panel rather
+      // than in a canvas-hosted input: a Konva stage has no DOM to focus, and
+      // a window.prompt() blocks the whole tab and is suppressed outright in
+      // some embedding contexts.
+      onCommit({
+        kind: "text",
+        at: { x: Math.round(p.x), y: Math.round(p.y) },
+        text: "",
+        mode: textMode,
+        // Sized against the image, so a mark keeps its proportion to the
+        // picture instead of to the current zoom.
+        size: defaultTextSize(imgW, imgH),
+      });
       return;
     }
 
@@ -770,6 +799,42 @@ function AnnotationShape({
               : Math.round(Math.min(imgH, Math.max(0, v + dy))),
           );
           onGeometry(a.id, { kind: "brush", points: moved });
+        }}
+        onClick={click}
+        onTap={click}
+      />
+    );
+  }
+
+  if (a.kind === "text") {
+    // Rendered in image-pixel space like everything else, so `fontSize` is the
+    // stored size directly — the Stage transform handles the zoom. A label
+    // mark is drawn dashed-dim to say "this is a note, not content": the two
+    // modes produce completely different output and the canvas has to show
+    // which one is which before the render, not after it.
+    const isLabel = a.mode === "label";
+    return (
+      <Text
+        x={a.at.x}
+        y={a.at.y}
+        text={a.text || "…"}
+        fontSize={a.size}
+        fontStyle="700"
+        fill={isLabel ? VECTOR_MARK_COLOR : stroke}
+        opacity={isLabel ? 0.85 : 1}
+        stroke="#0b0b0b"
+        strokeWidth={Math.max(1, a.size * 0.08)}
+        fillAfterStrokeEnabled
+        hitStrokeWidth={12}
+        draggable
+        onDragStart={dragStart}
+        onDragEnd={(e) => {
+          const p = clampToImage(
+            { x: e.target.x(), y: e.target.y() },
+            imgW,
+            imgH,
+          );
+          onGeometry(a.id, { kind: "text", at: roundVec(p) });
         }}
         onClick={click}
         onTap={click}

@@ -58,6 +58,7 @@ import {
   type BoxAnnotation,
   type EditRefRole,
   type PointAnnotation,
+  type TextAnnotation,
 } from "./types";
 
 // ─────────────────────────── Public API ───────────────────────────────────
@@ -206,6 +207,9 @@ export function compileAnnotationPrompt(input: CompileInput): CompileResult {
 
     const vectors = visible.filter(isVector);
     const rasters = visible.filter(isRaster);
+    // Two distinct jobs, split at the type level — see TextAnnotation.
+    const renderedTexts = visible.filter(isRenderedText);
+    const labelTexts = visible.filter(isLabelText);
 
     const kept = vectors.slice(0, maxTargets);
     const droppedCount = vectors.length - kept.length;
@@ -245,17 +249,22 @@ export function compileAnnotationPrompt(input: CompileInput): CompileResult {
       slots.push({ tag: "box", ordinal: boxes.length });
     }
 
+    // Rendered text has to reach the pixels too, so it forces the composite
+    // transport exactly like a brush stroke does — the model cannot render
+    // text at a position it was never shown.
+    const burnedIn = [...rasters, ...renderedTexts];
+
     plans.push({
       refId: ref.refId,
       index: ref.index,
-      transport: rasters.length > 0 ? "composite" : "clean",
+      transport: burnedIn.length > 0 ? "composite" : "clean",
       points,
       boxes,
-      rasterAnnotationIds: rasters.map((a) => a.id),
+      rasterAnnotationIds: burnedIn.map((a) => a.id),
       droppedCount,
     });
 
-    const notes = notesLine(ref.index, kept, slots, rasters);
+    const notes = notesLine(ref.index, kept, slots, rasters, labelTexts);
     if (notes) blocks.push(notes);
 
     const targets = targetBlock(ref.index, points, boxes);
@@ -272,6 +281,13 @@ export function compileAnnotationPrompt(input: CompileInput): CompileResult {
 
     const raster = rasterBlock(ref.index, rasters, taggedBoxes);
     if (raster) blocks.push(raster);
+
+    // AFTER the raster block, deliberately. That block ends with "do not
+    // reproduce the … markup", and rendered text is the exception to it — the
+    // exception has to come after the rule it qualifies, or the model reads
+    // the removal instruction last and applies it to everything.
+    const text = renderedTextBlock(ref.index, renderedTexts);
+    if (text) blocks.push(text);
   }
 
   return { prompt: blocks.join("\n\n"), plans, warnings };
@@ -331,6 +347,9 @@ function notesLine(
   kept: Array<PointAnnotation | BoxAnnotation>,
   slots: Array<{ tag: "point" | "box"; ordinal: number }>,
   rasters: Array<Annotation>,
+  /** Label-mode text marks. They contribute prose and nothing else — that is
+   *  the whole reason the mode exists. */
+  labelTexts: TextAnnotation[] = [],
 ): string | null {
   const entries: string[] = [];
 
@@ -348,6 +367,15 @@ function notesLine(
     const note = a.note?.trim();
     if (!note) continue;
     entries.push(`${a.label} (${a.kind} ${ordinal}) — ${note}`);
+  }
+
+  // A label's own text IS its note — there is no separate note field to fill
+  // in, because typing the words is the whole interaction.
+  let labelOrdinal = 0;
+  for (const a of labelTexts) {
+    const body = a.text.trim() || a.note?.trim();
+    if (!body) continue;
+    entries.push(`${a.label} (label ${++labelOrdinal}) — ${body}`);
   }
 
   if (entries.length === 0) return null;
@@ -421,6 +449,37 @@ function rasterBlock(
   );
 
   return sentences.join(" ");
+}
+
+/**
+ * Prose for text the model is being asked to RENDER.
+ *
+ * Separate from rasterBlock for one reason, and it is the reason the whole
+ * `mode` split exists: that block ends with "do not reproduce the … markup",
+ * and this text is markup the model must reproduce. Folding the two together
+ * would produce a prompt that contradicts itself, and the model would resolve
+ * the contradiction whichever way it liked — silently, differently each run.
+ *
+ * The quoted string is the load-bearing part. Describing the text rather than
+ * quoting it ("the sign should say the brand name") is how you get a render
+ * with plausible-looking gibberish in the right font.
+ */
+function renderedTextBlock(
+  index: number,
+  texts: TextAnnotation[],
+): string | null {
+  const usable = texts.filter((t) => t.text.trim());
+  if (usable.length === 0) return null;
+
+  const quoted = usable.map((t) => `"${t.text.trim()}"`);
+  const noun = usable.length === 1 ? "a text overlay" : "text overlays";
+  const it = usable.length === 1 ? "it" : "them";
+
+  return [
+    `Reference image ${index} also carries ${noun} reading ${joinNatural(quoted)}, drawn at the position ${usable.length === 1 ? "it" : "each"} should occupy.`,
+    `Render ${it} as real text in the output at ${usable.length === 1 ? "that position" : "those positions"}, matching the surrounding surface, perspective and lighting.`,
+    `This text is part of the requested result — keep ${it}.`,
+  ].join(" ");
 }
 
 /**
@@ -571,8 +630,24 @@ function isVector(a: Annotation): a is PointAnnotation | BoxAnnotation {
   return a.kind === "point" || a.kind === "box";
 }
 
+/**
+ * Markup that gets burned into the pixels AND must be removed from the output.
+ *
+ * A rendered text mark is also burned in, but it is deliberately NOT raster by
+ * this definition: the "do not reproduce the … markup" sentence is built from
+ * this list, and text the user asked the model to render is the one thing on
+ * the canvas that must survive into the result.
+ */
 function isRaster(a: Annotation): boolean {
   return a.kind === "brush" || a.kind === "arrow";
+}
+
+function isRenderedText(a: Annotation): a is TextAnnotation {
+  return a.kind === "text" && a.mode === "render";
+}
+
+function isLabelText(a: Annotation): a is TextAnnotation {
+  return a.kind === "text" && a.mode === "label";
 }
 
 function countWords(s: string): number {

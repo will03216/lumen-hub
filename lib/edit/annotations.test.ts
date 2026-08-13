@@ -33,6 +33,15 @@ function mark(kind: Annotation["kind"], label: string): Annotation {
         to: { x: 1, y: 1 },
         width: 8,
       };
+    case "text":
+      return {
+        ...base,
+        kind: "text",
+        at: { x: 0, y: 0 },
+        text: "note",
+        mode: "label",
+        size: 24,
+      };
   }
 }
 

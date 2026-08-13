@@ -8,7 +8,9 @@
     "start": "next start",
     "reels:render": "tsx scripts/reels-render.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "video-edit:probe": "tsx scripts/video-edit-probe.ts",
+    "video-edit:bench": "tsx scripts/video-edit-bench.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.99.0",

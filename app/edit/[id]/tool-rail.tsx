@@ -11,7 +11,7 @@
  * box would do gets a worse edit, so the hints steer toward the vector tools.
  */
 
-import { Brush, Hand, MoveUpRight, Pin, Square } from "lucide-react";
+import { Brush, Hand, MoveUpRight, Pin, Square, Type } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditTool } from "./edit-canvas";
 
@@ -30,6 +30,7 @@ const TOOLS: Array<{
     hint: "Show where something goes",
     Icon: MoveUpRight,
   },
+  { id: "text", label: "Text", hint: "Label a spot, or add real text", Icon: Type },
   { id: "pan", label: "Pan", hint: "Move the canvas", Icon: Hand },
 ];
 

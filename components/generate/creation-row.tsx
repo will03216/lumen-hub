@@ -27,6 +27,8 @@ import {
 import type { Asset } from "@/lib/library/assets";
 import { removeAsset, updateAsset } from "@/lib/library/assets";
 import { startEditSessionFromUrl } from "@/lib/edit/start-session";
+import { VIDEO_EDIT_ENABLED } from "@/lib/video-edit/flag";
+import { startVideoSessionFromUrl } from "@/lib/video-edit/start-video-session";
 import type { CreationEntry } from "@/lib/library/feed";
 import { AssetMedia } from "@/components/library/asset-media";
 import { BrandLogo, resolveModelBrand } from "@/components/ui/brand-logo";
@@ -83,6 +85,35 @@ function AssetRow({ asset }: { asset: Asset }) {
       // leaves the pencil looking broken with no explanation, which is worse
       // than the disabled "coming soon" pill this replaced.
       setEditError(e instanceof Error ? e.message : "Could not open the editor.");
+      setBusyEdit(false);
+    }
+  }
+
+  /**
+   * The same affordance for a video asset — PRD §6, entry point 2.
+   *
+   * Deliberately a separate handler rather than a branch inside onEdit: the
+   * two produce different session types in different stores, and the failure
+   * modes differ (a clip can be too long or have no readable duration, which
+   * an image never is). Sharing the function would mean one try/catch
+   * reporting two unrelated sets of errors.
+   */
+  async function onEditVideo(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busyEdit) return;
+    setBusyEdit(true);
+    setEditError(null);
+    try {
+      const session = await startVideoSessionFromUrl({
+        url: asset.mirrorUrl ?? asset.url,
+        assetId: asset.id,
+        name: asset.title,
+      });
+      router.push(`/video-edit/${session.id}`);
+    } catch (e) {
+      setEditError(
+        e instanceof Error ? e.message : "Could not open the video editor.",
+      );
       setBusyEdit(false);
     }
   }
@@ -290,6 +321,20 @@ function AssetRow({ asset }: { asset: Asset }) {
                   ✕
                 </button>
               </div>
+            </div>
+          )}
+
+          {asset.kind === "video" && VIDEO_EDIT_ENABLED && !editError && (
+            <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-bg/85 p-1 opacity-0 transition-opacity backdrop-blur-sm group-hover:opacity-100 focus-within:opacity-100">
+              <IconButton
+                label={busyEdit ? "Opening editor…" : "Smart edit"}
+                disabled={busyEdit}
+                onClick={(e) => {
+                  void onEditVideo(e);
+                }}
+              >
+                <Pencil className="size-3.5" />
+              </IconButton>
             </div>
           )}
 

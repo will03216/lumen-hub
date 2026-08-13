@@ -32,6 +32,7 @@ import {
   type BrushAnnotation,
   type PointAnnotation,
   type Rect,
+  type TextAnnotation,
   type Vec,
 } from "./types";
 
@@ -1009,5 +1010,110 @@ describe("reference roles (§5C)", () => {
       "Apply the requested edit specifically to these marked targets. Preserve unmarked regions unless the instruction explicitly says otherwise.",
     );
     expect(r.prompt).toContain("<point>[[250,500]]</point>");
+  });
+});
+
+// ───────────────────────── Text marks ─────────────────────────────────────
+
+function text(
+  at: Vec,
+  body: string,
+  mode: "label" | "render",
+  extra: Partial<TextAnnotation> = {},
+): TextAnnotation {
+  const n = ++seq;
+  return {
+    id: `t${n}`,
+    kind: "text",
+    label: `Text ${String(n).padStart(2, "0")}`,
+    color: MARKER_COLOR,
+    createdAt: n,
+    at,
+    text: body,
+    mode,
+    size: 48,
+    ...extra,
+  };
+}
+
+describe("text marks", () => {
+  it("a label contributes prose and NEVER reaches the pixels", () => {
+    // The failure this guards against is permanent: a note the user typed to
+    // explain themselves, burned into their own output as typography.
+    const r = compileAnnotationPrompt({
+      instruction: "swap the drink",
+      refs: [ref([text({ x: 100, y: 100 }, "the one on the left", "label")])],
+    });
+    expect(r.plans[0].transport).toBe("clean");
+    expect(r.plans[0].rasterAnnotationIds).toEqual([]);
+    expect(r.prompt).toContain("the one on the left");
+  });
+
+  it("a render-mode mark forces the composite transport", () => {
+    // The model cannot render text at a position it was never shown.
+    const r = compileAnnotationPrompt({
+      instruction: "put a sign up",
+      refs: [ref([text({ x: 100, y: 100 }, "SALE", "render")])],
+    });
+    expect(r.plans[0].transport).toBe("composite");
+    expect(r.plans[0].rasterAnnotationIds).toHaveLength(1);
+  });
+
+  it("quotes the exact string rather than describing it", () => {
+    // Describing it ("the sign should say the brand name") is how you get a
+    // render with plausible-looking gibberish in the right font.
+    const r = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [ref([text({ x: 10, y: 10 }, "SALE", "render")])],
+    });
+    expect(r.prompt).toContain('"SALE"');
+    expect(r.prompt).toContain("keep it");
+  });
+
+  it("exempts rendered text from the do-not-reproduce sentence, and orders the two", () => {
+    // rasterBlock ends with "do not reproduce the … markup"; rendered text is
+    // the exception to exactly that rule, so it must come after it. Reversed,
+    // the model reads the removal instruction last and applies it to
+    // everything — including the text it was asked to render.
+    const r = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [
+        ref([
+          brush(),
+          text({ x: 10, y: 10 }, "OPEN", "render"),
+        ]),
+      ],
+    });
+    const removal = r.prompt.indexOf("Do not reproduce");
+    const rendered = r.prompt.indexOf('"OPEN"');
+    expect(removal).toBeGreaterThan(-1);
+    expect(rendered).toBeGreaterThan(removal);
+    // The markup census counts the brush, never the text.
+    expect(r.prompt).toContain("1 painted mask area");
+    expect(r.prompt).not.toMatch(/2 painted/);
+  });
+
+  it("ignores an empty text mark rather than emitting empty quotes", () => {
+    const r = compileAnnotationPrompt({
+      instruction: "x",
+      refs: [ref([text({ x: 10, y: 10 }, "   ", "render")])],
+    });
+    expect(r.prompt).not.toContain('""');
+  });
+
+  it("leaves a ref with no text marks byte-identical to before", () => {
+    // The whole additive contract in one assertion.
+    seq = 0;
+    const withoutText = compileAnnotationPrompt({
+      instruction: "make it walnut",
+      refs: [ref([point({ x: 840, y: 318 })])],
+    });
+    seq = 0;
+    const alsoWithoutText = compileAnnotationPrompt({
+      instruction: "make it walnut",
+      refs: [ref([point({ x: 840, y: 318 })])],
+    });
+    expect(withoutText.prompt).toBe(alsoWithoutText.prompt);
+    expect(withoutText.prompt).not.toContain("text overlay");
   });
 });

@@ -26,6 +26,7 @@
 import { memo, useCallback } from "react";
 import { useReactFlow, type NodeProps } from "@xyflow/react";
 import { mediaProxyUrl } from "@/lib/compare/media-proxy";
+import { VIDEO_EDIT_ENABLED } from "@/lib/video-edit/flag";
 import { NodeShell } from "./node-shell";
 import type { NodeTypeSpec, StudioNodeData } from "../types";
 
@@ -60,6 +61,11 @@ export const FrameExtractNode = memo(function FrameExtractNode({
   );
 
   const frame = d.outputs.frame;
+  /** The clip this node was pointed at, if any — the handoff to Video Edit
+   *  needs the VIDEO, not the extracted still. */
+  const inputs = d.inputs as Record<string, string | undefined>;
+  const sourceVideoUrl =
+    typeof inputs?.video === "string" ? inputs.video.trim() : "";
 
   return (
     <NodeShell
@@ -87,6 +93,25 @@ export const FrameExtractNode = memo(function FrameExtractNode({
         <span className="text-ink">frame</span> into Image Gen, Style
         Transfer, or Video Gen&rsquo;s image input.
       </div>
+
+      {/*
+        PRD §6, entry point 4. This node extracts a frame and stops — no
+        editor, no timestamp ledger, no way back into video. Rather than grow
+        it into a second editor, it points at the one that exists.
+
+        The VIDEO url is handed over, not the extracted frame: Video Edit
+        starts from a clip and does its own capture, because it needs the
+        decoder's real timestamp and this node does not record one.
+      */}
+      {VIDEO_EDIT_ENABLED && sourceVideoUrl && (
+        <a
+          href={`/video-edit?src=${encodeURIComponent(sourceVideoUrl)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="nodrag block rounded-[8px] border border-border px-2 py-1.5 text-center font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim transition-colors hover:border-border-strong hover:text-ink"
+        >
+          Open in Video Edit →
+        </a>
+      )}
 
       {frame && (
         <div className="overflow-hidden rounded-[8px] border border-border bg-panel">

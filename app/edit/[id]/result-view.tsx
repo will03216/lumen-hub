@@ -316,6 +316,21 @@ function MarksOverlay({
               />
             );
           }
+          if (a.kind === "text") {
+            return (
+              <text
+                key={a.id}
+                x={a.at.x}
+                y={a.at.y}
+                fontSize={a.size}
+                fontWeight={700}
+                fill={stroke}
+                dominantBaseline="hanging"
+              >
+                {a.text}
+              </text>
+            );
+          }
           return (
             <line
               key={a.id}

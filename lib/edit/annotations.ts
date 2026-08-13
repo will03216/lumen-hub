@@ -23,7 +23,8 @@ export type DraftAnnotation =
   | { kind: "point"; at: Vec }
   | { kind: "box"; rect: { x: number; y: number; w: number; h: number } }
   | { kind: "brush"; points: number[]; width: number }
-  | { kind: "arrow"; from: Vec; to: Vec; width: number };
+  | { kind: "arrow"; from: Vec; to: Vec; width: number }
+  | { kind: "text"; at: Vec; text: string; mode: "label" | "render"; size: number };
 
 /** The human word for each tool, used as the label stem. */
 const LABEL_STEM: Record<EditToolKind, string> = {
@@ -31,6 +32,7 @@ const LABEL_STEM: Record<EditToolKind, string> = {
   box: "Region",
   brush: "Paint",
   arrow: "Arrow",
+  text: "Text",
 };
 
 /**
@@ -73,7 +75,13 @@ export function buildAnnotation(
     // burned in and named in the prose, so they keep the marker colour
     // whatever the caller passes. See the note on VECTOR_MARK_COLOR.
     color:
-      draft.kind === "point" || draft.kind === "box"
+      draft.kind === "point" ||
+      draft.kind === "box" ||
+      // A label never reaches the pixels either, so it belongs with the
+      // vector marks. A RENDER-mode text mark does get burned in, but it is
+      // the one piece of markup meant to survive into the output — so it
+      // takes the caller's colour rather than the "do not reproduce" magenta.
+      (draft.kind === "text" && draft.mode === "label")
         ? VECTOR_MARK_COLOR
         : (opts.color ?? MARKER_COLOR),
     createdAt: opts.now ?? 0,
@@ -98,6 +106,15 @@ export function buildAnnotation(
         from: draft.from,
         to: draft.to,
         width: draft.width,
+      };
+    case "text":
+      return {
+        ...base,
+        kind: "text",
+        at: draft.at,
+        text: draft.text,
+        mode: draft.mode,
+        size: draft.size,
       };
   }
 }

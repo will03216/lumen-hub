@@ -43,7 +43,7 @@ export type Rect = { x: number; y: number; w: number; h: number };
 
 // ─────────────────────────── Annotations ──────────────────────────────────
 
-export type EditToolKind = "point" | "box" | "brush" | "arrow";
+export type EditToolKind = "point" | "box" | "brush" | "arrow" | "text";
 
 /**
  * The transport split, and the whole reason there are two kinds of tool.
@@ -99,11 +99,41 @@ export type ArrowAnnotation = AnnotationBase & {
   intent?: "move-to" | "look-toward" | "extend-along" | "point-at";
 };
 
+/**
+ * A text mark, and the one annotation with two fundamentally different jobs.
+ *
+ * `mode` is not a styling option — it decides whether these pixels exist:
+ *
+ * · "label" — a note anchored to a spot on the image. Compiles into prose and
+ *   is NEVER drawn into the composite. This is what people reach for by
+ *   default ("this one", "the red car"), and burning it into the frame would
+ *   put permanent typography on their output.
+ *
+ * · "render" — text the model is being asked to PUT IN the result. Drawn into
+ *   the composite at the requested position and described in prose, and
+ *   deliberately excluded from the "do not reproduce the markup" sentence,
+ *   because reproducing it is the entire request.
+ *
+ * Without the split, every note a user typed would risk being rendered. With
+ * it, the two cases are separated at the type level and the compiler can't
+ * confuse them.
+ */
+export type TextAnnotation = AnnotationBase & {
+  kind: "text";
+  at: Vec;
+  text: string;
+  mode: "label" | "render";
+  /** Font size in IMAGE pixels, so a mark keeps its proportion to the picture
+   *  rather than to the current zoom. */
+  size: number;
+};
+
 export type Annotation =
   | PointAnnotation
   | BoxAnnotation
   | BrushAnnotation
-  | ArrowAnnotation;
+  | ArrowAnnotation
+  | TextAnnotation;
 
 // ─────────────────────────── References ───────────────────────────────────
 
@@ -283,4 +313,13 @@ export function markColor(a: Pick<Annotation, "kind" | "color">): string {
   return a.kind === "point" || a.kind === "box"
     ? VECTOR_MARK_COLOR
     : a.color || MARKER_COLOR;
+}
+
+/** Default size for a new text mark, as a fraction of the image's short side.
+ *  A fixed pixel default is illegible on a 4K frame and enormous on a 480p
+ *  one; scaling with the picture is the only value that works on both. */
+export const TEXT_MARK_SIZE_RATIO = 0.05;
+
+export function defaultTextSize(width: number, height: number): number {
+  return Math.max(12, Math.round(Math.min(width, height) * TEXT_MARK_SIZE_RATIO));
 }

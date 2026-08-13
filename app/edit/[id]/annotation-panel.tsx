@@ -34,7 +34,10 @@ export function AnnotationPanel({
   // discriminated union, so spreading an arbitrary partial of it onto a
   // member is unsound (it would let a `rect` land on a point). These are the
   // only two fields this panel edits.
-  onPatch: (id: string, patch: { note?: string; hidden?: boolean }) => void;
+  onPatch: (
+    id: string,
+    patch: { note?: string; hidden?: boolean; text?: string; mode?: "label" | "render" },
+  ) => void;
   onRemove: (id: string) => void;
 }) {
   if (annotations.length === 0) {
@@ -98,13 +101,63 @@ export function AnnotationPanel({
             </button>
           </div>
 
-          <input
-            value={a.note ?? ""}
-            onChange={(e) => onPatch(a.id, { note: e.target.value })}
-            onClick={(e) => e.stopPropagation()}
-            placeholder="What should change here?"
-            className="mt-1.5 w-full bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-mute"
-          />
+          {/*
+            A text mark is placed EMPTY — the Konva stage has no DOM to type
+            into — so this input is the only way it ever gets its words.
+            Without it the text tool silently places invisible marks.
+          */}
+          {a.kind === "text" && (
+            <div className="mt-1.5 space-y-1.5">
+              <input
+                autoFocus={a.id === selectedId && !a.text}
+                value={a.text}
+                onChange={(e) => onPatch(a.id, { text: e.target.value })}
+                onClick={(e) => e.stopPropagation()}
+                placeholder={a.mode === "render" ? "SALE" : "the one on the left"}
+                className="w-full rounded-[6px] border border-border bg-transparent px-2 py-1 text-[12px] text-ink outline-none placeholder:text-ink-mute focus:border-ink-dim"
+              />
+              {/* The two modes produce completely different output, so the
+                  choice has to be visible and changeable after the fact —
+                  not only at the moment the mark was placed. */}
+              <div className="flex gap-1">
+                {(
+                  [
+                    ["label", "Note", "Explains the spot. Never appears in the result."],
+                    ["render", "In shot", "Drawn into the frame and kept in the result."],
+                  ] as const
+                ).map(([mode, label, hint]) => (
+                  <button
+                    key={mode}
+                    title={hint}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPatch(a.id, { mode });
+                    }}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] transition-colors",
+                      a.mode === mode
+                        ? "border-border-strong text-ink"
+                        : "border-border text-ink-mute hover:text-ink",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* A label's own words ARE its note, so a second free-text field
+              would be two places to say one thing. */}
+          {a.kind !== "text" && (
+            <input
+              value={a.note ?? ""}
+              onChange={(e) => onPatch(a.id, { note: e.target.value })}
+              onClick={(e) => e.stopPropagation()}
+              placeholder="What should change here?"
+              className="mt-1.5 w-full bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-mute"
+            />
+          )}
         </div>
       ))}
 

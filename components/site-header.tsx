@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/ui/wordmark";
 import { useAuth } from "@/lib/cloud/auth";
 import { cn } from "@/lib/utils";
+import { VIDEO_EDIT_ENABLED } from "@/lib/video-edit/flag";
 
 /**
  * Top-level nav follows the four-pillar IA: Generator, Canvas, Library,
@@ -24,6 +25,18 @@ const NAV = [
   { label: "Index", href: "/", match: (p: string) => p === "/" },
   { label: "Generator", href: "/generate", match: (p: string) => p.startsWith("/generate") },
   { label: "Edit", href: "/edit", match: (p: string) => p.startsWith("/edit") },
+  // Gated: Smart Video Edit ships behind NEXT_PUBLIC_VIDEO_EDIT (PRD R16).
+  // Spread rather than a conditional entry so the array stays a plain literal
+  // and `match` keeps its inferred type.
+  ...(VIDEO_EDIT_ENABLED
+    ? [
+        {
+          label: "Video Edit",
+          href: "/video-edit",
+          match: (p: string) => p.startsWith("/video-edit"),
+        },
+      ]
+    : []),
   { label: "Story", href: "/story", match: (p: string) => p.startsWith("/story") },
   { label: "Canvas", href: "/studio", match: (p: string) => p.startsWith("/studio") },
   { label: "Library", href: "/library", match: (p: string) => p.startsWith("/library") },

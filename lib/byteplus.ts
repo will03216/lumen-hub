@@ -1088,6 +1088,11 @@ export type VideoContentItem =
       type: "video_url";
       video_url: { url: string };
       role?: "reference_video";
+    }
+  | {
+      type: "audio_url";
+      audio_url: { url: string };
+      role?: "reference_audio";
     };
 
 export type ReferenceRole = "subject" | "environment" | "motion" | "audio";
@@ -1120,6 +1125,16 @@ export type VideoParams = {
   images?: Array<{ url: string; role?: "first_frame" | "last_frame" | "reference_image" }>;
   /** Video URL inputs for Seedance 2.0 — emitted as type:"video_url" in content. Role must be "reference_video". */
   videos?: Array<{ url: string; role?: "reference_video" }>;
+  /**
+   * Audio URL inputs — Seedance 2.5 and later.
+   *
+   * A reference track the render should follow: background music, a beat to
+   * cut against, or a voice to lip-sync to. Distinct from `audio`, which is
+   * the boolean asking the model to GENERATE a track. Both can be set — 2.5's
+   * own documented example passes a reference track and `generate_audio:true`
+   * together, so the generated voice sits over the supplied music.
+   */
+  audios?: Array<{ url: string; role?: "reference_audio" }>;
   references?: ReferenceItem[]; // 2.0: multi-reference inputs
 };
 
@@ -1182,6 +1197,13 @@ function buildVideoRequestBody(params: VideoParams): Record<string, unknown> {
       type: "video_url",
       video_url: { url: vid.url },
       ...(vid.role && { role: vid.role }),
+    });
+  }
+  for (const aud of params.audios ?? []) {
+    content.push({
+      type: "audio_url",
+      audio_url: { url: aud.url },
+      ...(aud.role && { role: aud.role }),
     });
   }
 

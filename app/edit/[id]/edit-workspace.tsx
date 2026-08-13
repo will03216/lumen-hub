@@ -81,6 +81,9 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
 
   const [tool, setTool] = React.useState<EditTool>("box");
   const [brushWidth, setBrushWidth] = React.useState(24);
+  /** Defaults to "label" — the safe direction to be wrong in. A label wrongly
+   *  rendered burns the user's own note permanently into their image. */
+  const [textMode, setTextMode] = React.useState<"label" | "render">("label");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [showCompiled, setShowCompiled] = React.useState(false);
   const [viewVersionId, setViewVersionId] = React.useState<string | null>(null);
@@ -169,7 +172,10 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
   );
 
   const handlePatch = React.useCallback(
-    (id: string, patch: { note?: string; hidden?: boolean }) => {
+    (
+      id: string,
+      patch: { note?: string; hidden?: boolean; text?: string; mode?: "label" | "render" },
+    ) => {
       if (!activeRefId) return;
       const current = session?.refs
         .find((r) => r.id === activeRefId)
@@ -279,12 +285,42 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[164px_1fr_320px]">
         {/* Tools */}
-        <ToolRail
-          tool={tool}
-          onToolChange={setTool}
-          brushWidth={brushWidth}
-          onBrushWidthChange={setBrushWidth}
-        />
+        <div className="space-y-4">
+          <ToolRail
+            tool={tool}
+            onToolChange={setTool}
+            brushWidth={brushWidth}
+            onBrushWidthChange={setBrushWidth}
+          />
+
+          {tool === "text" && (
+            <div className="space-y-1.5 px-1">
+              <span className="block font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+                Text is
+              </span>
+              {(
+                [
+                  ["label", "a note to the model", "Explains what to change. Never appears in the result."],
+                  ["render", "words to put in the image", "Drawn into the picture and kept in the result."],
+                ] as const
+              ).map(([mode, label, hint]) => (
+                <button
+                  key={mode}
+                  onClick={() => setTextMode(mode)}
+                  title={hint}
+                  className={cn(
+                    "block w-full rounded-[8px] border px-2 py-1.5 text-left text-[11px] leading-tight transition-colors",
+                    textMode === mode
+                      ? "border-border-strong bg-panel text-ink"
+                      : "border-transparent text-ink-mute hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Viewport */}
         <div className="space-y-2">
@@ -315,6 +351,7 @@ export function EditWorkspace({ sessionId }: { sessionId: string }) {
                   tool={tool}
                   brushWidth={brushWidth}
                   color={MARKER_COLOR}
+                  textMode={textMode}
                   selectedId={selectedId}
                   onSelect={setSelectedId}
                   onCommit={handleCommit}

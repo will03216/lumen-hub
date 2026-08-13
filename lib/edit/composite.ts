@@ -38,6 +38,7 @@ import type {
   BoxAnnotation,
   BrushAnnotation,
   PointAnnotation,
+  TextAnnotation,
 } from "./types";
 
 export type CompositeOpts = {
@@ -129,6 +130,13 @@ export async function renderComposite(
       drawBox(ctx, a, scale, opts.drawAll ? a.color : undefined);
     } else if (a.kind === "point" && opts.drawAll) {
       drawPoint(ctx, a, scale);
+    } else if (a.kind === "text") {
+      // Only render-mode text is burned into the pixels the model sees. A
+      // label is an instruction to us, not content for the picture, and
+      // drawing it would put the user's own note permanently into their
+      // output. It still appears on the verification image (drawAll), where
+      // the point is to show every mark that exists.
+      if (a.mode === "render" || opts.drawAll) drawText(ctx, a, scale);
     }
     if (opts.drawAll) drawLabel(ctx, a, scale);
   }
@@ -210,6 +218,40 @@ function drawPoint(
   ctx.restore();
 }
 
+/**
+ * A text mark, drawn at its anchor in the image's own pixel space.
+ *
+ * Size is stored in image pixels for exactly this reason: multiplying by
+ * `scale` keeps the text the same size relative to the picture no matter what
+ * downscale the model's input ceiling forced on us. A size in screen pixels
+ * would shrink or grow with the resample, and the text the model was asked to
+ * reproduce would arrive at a different size than the user placed.
+ *
+ * The dark outline is what makes it legible over an arbitrary frame — white
+ * text on a white wall is text the model cannot read either.
+ */
+function drawText(
+  ctx: CanvasRenderingContext2D,
+  a: TextAnnotation,
+  scale: number,
+): void {
+  const body = a.text.trim();
+  if (!body) return;
+
+  const size = Math.max(8, a.size * scale);
+  ctx.save();
+  ctx.font = `700 ${size}px system-ui, sans-serif`;
+  ctx.textBaseline = "top";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = Math.max(1, size * 0.14);
+  ctx.strokeText(body, a.at.x * scale, a.at.y * scale);
+  ctx.fillStyle = a.color;
+  ctx.fillText(body, a.at.x * scale, a.at.y * scale);
+  ctx.restore();
+}
+
 /** The mark's name, so the model can say "Region 01 is too high" rather than
  *  describing a rectangle. */
 function drawLabel(
@@ -224,7 +266,9 @@ function drawLabel(
         ? { x: a.at.x * scale + 10, y: a.at.y * scale }
         : a.kind === "arrow"
           ? { x: a.from.x * scale, y: a.from.y * scale }
-          : { x: a.points[0] * scale, y: a.points[1] * scale };
+          : a.kind === "text"
+            ? { x: a.at.x * scale, y: a.at.y * scale }
+            : { x: a.points[0] * scale, y: a.points[1] * scale };
 
   const size = Math.max(11, Math.min(ctx.canvas.width, ctx.canvas.height) / 55);
   ctx.save();

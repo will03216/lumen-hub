@@ -56,6 +56,10 @@ export async function POST(req: NextRequest) {
         : await createVideoTask({
             prompt: body.prompt,
             model: body.model,
+            // Seedance 2.5 audio references. Forwarded rather than dropped —
+            // an unknown field on the client silently vanishing is the kind of
+            // failure that reads as "the model ignored my music".
+            audios: body.audios,
             resolution: body.resolution,
             duration: body.duration,
             ratio: body.ratio,
