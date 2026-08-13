@@ -413,6 +413,31 @@ const CAPS_V20: VideoCaps = {
   referenceMode: true,
 };
 
+/**
+ * Seedance 2.5.
+ *
+ * Durations are ANY integer 4–30, not the 2.0 family's fixed ladder — the
+ * vendor's own reference request asks for 11, which is not on that list. The
+ * list here is what the UI offers, and it exists because a dropdown of
+ * twenty-seven numbers is worse than a dropdown of eleven; the API accepts the
+ * rest. Past 15 the ladder widens to fives — nobody picks 23 on purpose, and
+ * the campaign plans in docs/plans-en are all written to 20/30.
+ *
+ * The single 30s take is the capability the F1/F2 plans are costed against:
+ * one generation covering a whole brand film, rather than a stitch of clips
+ * that has to hold continuity across seams.
+ *
+ * 4k is deliberately absent until something submits one. 2.0 standard renders
+ * 4k and 2.5 plausibly does too, but "plausibly" is how you ship a control
+ * that returns an error, and this model's caps have not been probed.
+ */
+const CAPS_V25: VideoCaps = {
+  resolutions: ["480p", "720p", "1080p"],
+  durations: [4, 5, 6, 8, 10, 11, 12, 15, 20, 25, 30],
+  audio: true,
+  referenceMode: true,
+};
+
 // Seedance 2.0 standard — same as Fast plus 4k output (verified: submits and
 // renders a real 4k video). 4k is far slower and uses vastly more tokens, so
 // it's opt-in per render, not a default.
@@ -454,6 +479,20 @@ export const VIDEO_MODELS: readonly VideoModel[] = [
     label: "Seedance 2.0",
     hint: "Native audio · up to 4K · 4–15s",
     caps: CAPS_V20_STD,
+  },
+  {
+    // Deliberately NOT first: DEFAULT_VIDEO_MODEL_ID reads VIDEO_MODELS[0],
+    // so leading with 2.5 would silently repoint the Generator, Studio,
+    // Compare and Story at a different model — a product decision, not a
+    // side effect of adding support for it. Video Edit opts in explicitly.
+    //
+    // Confirmed against the vendor's reference request, not guessed. The
+    // `dreamina-seedance-2-` prefix means isSeedance2() already routes it to
+    // the top-level-fields schema with no change.
+    id: "dreamina-seedance-2-5-260628",
+    label: "Seedance 2.5",
+    hint: "Native audio + audio refs · 4–15s · timestamped prompts",
+    caps: CAPS_V25,
   },
   {
     id: "dreamina-seedance-2-0-fast-260128",

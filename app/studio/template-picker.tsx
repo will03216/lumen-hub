@@ -165,6 +165,49 @@ const TEMPLATE_FLOWS: Record<string, Array<{ icon: LucideIcon }>> = {
     { icon: FileText },
     { icon: VideoIcon },
   ],
+  // All three Heckler cases share one shape: contact sheet → clip.
+  "heckler-doors-rise": [
+    { icon: Type },
+    { icon: ImageIcon },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
+  "heckler-slow-motion-crowd": [
+    { icon: Type },
+    { icon: ImageIcon },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
+  "heckler-traffic-light-cascade": [
+    { icon: Type },
+    { icon: ImageIcon },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
+  "feed-video-set": [
+    { icon: ImageIcon },
+    { icon: Type },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
+  "creative-url-pipeline": [
+    { icon: Globe },
+    { icon: Sparkles },
+    { icon: ImageIcon },
+    { icon: Eye },
+  ],
+  "tiktok-reference-clip": [
+    { icon: Globe },
+    { icon: Sparkles },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
+  "vertical-feed-ad": [
+    { icon: ImageIcon },
+    { icon: Type },
+    { icon: VideoIcon },
+    { icon: Eye },
+  ],
   "reference-creative-package": [
     { icon: Globe },
     { icon: ImageIcon },
