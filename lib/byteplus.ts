@@ -82,16 +82,43 @@ export class BytePlusError extends Error {
   }
 }
 
+/**
+ * Backstop against an upstream that accepts the connection and then says
+ * nothing. Not a tight bound — image generation at 2K legitimately runs for
+ * minutes, and every caller that cares already imposes its own shorter
+ * deadline (the agent client gives up at 120s). This exists so a hung socket
+ * cannot park a server request forever: with no timeout at all, the route
+ * never returns, never logs — `logRouteOutcome` runs after the call — and the
+ * failure is invisible on both sides.
+ */
+const UPSTREAM_TIMEOUT_MS = 240_000;
+
 async function request<T>(path: string, init: RequestInit, keyOverride?: string): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey(keyOverride)}`,
-      ...(init.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey(keyOverride)}`,
+        ...(init.headers ?? {}),
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // Shaped as a BytePlusError so it travels the paths callers already
+    // handle — the route's status forwarding, the error classifier — rather
+    // than surfacing as a bare TypeError nothing knows what to do with.
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new BytePlusError(
+        504,
+        "Gateway Timeout",
+        `No response from BytePlus within ${Math.round(UPSTREAM_TIMEOUT_MS / 1000)}s for ${path}.`,
+      );
+    }
+    throw err;
+  }
   const text = await res.text();
   if (!res.ok) {
     throw new BytePlusError(res.status, res.statusText, text);
